@@ -165,7 +165,7 @@ to a positive number to enable polling and disable native filesystem notificatio
 #### Prerequisites
 
 - Paperless runs on Linux only, Windows is not supported.
-- Python 3.11, 3.12, 3.13, or 3.14 is required. As a policy, Paperless-ngx aims to support at least the three most recent Python versions and drops support for versions as they reach end-of-life. Newer versions may work, but some dependencies may not be fully compatible.
+- CPython 3.15 is recommended and is the default for development and Docker images. Python 3.11 through 3.14 remain supported. As a policy, Paperless-ngx aims to support at least the three most recent Python versions and drops support for versions as they reach end-of-life.
 
 #### Installation
 

@@ -996,7 +996,7 @@ title:Invoice*
 
 !!! note
 
-    When a [stemmer is available](configuration.md#PAPERLESS_SEARCH_LANGUAGE) for your search language, words are indexed by their stem, so `copy*` also finds "copies". A prefix that runs past the stem can find nothing: `universit*` misses "university", which is stored as `univers`. If a wildcard finds nothing, try a shorter prefix, such as `univers*`.
+    When a [stemmer is available](configuration.md#PAPERLESS_SEARCH_LANGUAGE) for your search language, words are indexed by their stem, so `copy*` also finds "copies". A prefix that runs past the stem can find nothing: `electricit*` misses "electricity", which is stored as `electr`. If a wildcard finds nothing, try a shorter prefix, such as `electr*`.
 
 #### Searching by date
 

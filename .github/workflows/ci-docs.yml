@@ -6,14 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 concurrency:
-  # Let dev/main commits finish, PR and feature-branch runs supersede older ones
-  group: docs-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && github.run_id) || github.ref }}
+  # Let dev/lunabuild commits finish, PR and feature-branch runs supersede older ones
+  group: docs-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/lunabuild') && github.run_id) || github.ref }}
   cancel-in-progress: true
 permissions:
   contents: read
 env:
   DEFAULT_UV_VERSION: "0.13.x"
-  DEFAULT_PYTHON_VERSION: "3.12"
+  DEFAULT_PYTHON_VERSION: "3.15"
 jobs:
   changes:
     name: Detect Docs Changes
@@ -31,7 +31,7 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "run_all=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "dev" ) ]]; then
+          elif [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref_name }}" == "lunabuild" || "${{ github.ref_name }}" == "dev" ) ]]; then
             echo "run_all=true" >> "$GITHUB_OUTPUT"
           else
             echo "run_all=false" >> "$GITHUB_OUTPUT"
@@ -102,7 +102,7 @@ jobs:
   deploy:
     name: Deploy Documentation
     needs: [changes, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.docs_changed == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/lunabuild' && needs.changes.outputs.docs_changed == 'true'
     runs-on: ubuntu-26.04
     permissions:
       pages: write

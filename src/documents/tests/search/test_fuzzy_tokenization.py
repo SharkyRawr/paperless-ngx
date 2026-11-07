@@ -42,9 +42,9 @@ class TestFuzzyClauseWords:
         THEN:
             - Only the correctly-spelled document and its typo match; the
               clause does not widen far enough to reach the unrelated
-              words. 'universities' stems to 'univers'; feeding that back
-              to tantivy would stem it again to 'univ', whose fuzzy prefix
-              reaches unrelated words - the clause must stay wide enough
+              words. Earlier stemmers turned 'universities' into 'univers'
+              and a second pass into 'univ', whose fuzzy prefix reached
+              unrelated words - the clause must stay wide enough
               for a typo and no wider
         """
         wanted = index_document(

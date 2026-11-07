@@ -539,6 +539,10 @@ task scheduler.
     changes, and missing indexes are all detected and rebuilt before the webserver
     starts. No manual step is required.
 
+    The upgrade to Tantivy 0.27 for Python 3.15 support changes some word stems
+    and triggers a one-time index rebuild. Startup can take longer while this
+    completes; document files and OCR content are unchanged.
+
     **Bare metal users:** Run the following command after each upgrade (and after
     changing `PAPERLESS_SEARCH_LANGUAGE`). It is a no-op if the index is already
     up to date:

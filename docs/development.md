@@ -72,10 +72,12 @@ first-time setup.
     mkdir -p consume media
     ```
 
-4.  Install the Python dependencies:
+4.  Install the Python dependencies. The repository's `.python-version` selects
+    CPython 3.15; uv downloads it if needed. An existing virtual environment using
+    an older Python version will be recreated when you sync:
 
     ```bash
-    uv sync --group dev
+    uv sync --group dev --locked
     ```
 
 5.  Install pre-commit hooks:

@@ -110,7 +110,7 @@ jobs:
           python-version: ${{ steps.setup-python.outputs.python-version }}
       - name: Install system dependencies
         timeout-minutes: 12
-        uses: $/.github/actions/apt-install
+        uses: ./.github/actions/apt-install
         with:
           packages: unpaper tesseract-ocr ghostscript poppler-utils qpdf
       - name: Install Python dependencies
@@ -120,7 +120,7 @@ jobs:
           uv sync \
             --python "${PYTHON_VERSION}" \
             --group testing \
-            --frozen
+            --locked
       - name: List installed Python dependencies
         run: |
           uv pip list
@@ -132,7 +132,7 @@ jobs:
           uv run \
             --python "${PYTHON_VERSION}" \
             --dev \
-            --frozen \
+            --locked \
             pytest
       - name: Upload test results to Codecov
         if: always()
@@ -160,7 +160,7 @@ jobs:
     permissions:
       contents: read
     env:
-      DEFAULT_PYTHON: "3.12"
+      DEFAULT_PYTHON: "3.15"
       PAPERLESS_SECRET_KEY: "ci-typing-not-a-real-secret"
     steps:
       - name: Checkout
@@ -186,7 +186,7 @@ jobs:
             --python "${PYTHON_VERSION}" \
             --group testing \
             --group typing \
-            --frozen
+            --locked
       - name: List installed Python dependencies
         run: |
           uv pip list

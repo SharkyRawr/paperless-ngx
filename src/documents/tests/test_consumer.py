@@ -1627,7 +1627,7 @@ class PostConsumeTestCase(DirectoriesMixin, GetConsumerMixin, TestCase):
                 with self.get_consumer(self.test_file) as consumer:
                     with self.assertRaisesRegex(
                         ConsumerError,
-                        r"sample\.pdf: Error while executing post-consume script: Command '\[.*\]' returned non-zero exit status \d+\.",
+                        r"sample\.pdf: Error while executing post-consume script: Command '?\[.*\]'? returned non-zero exit status \d+\.",
                     ):
                         consumer.run_post_consume_script(doc)
 

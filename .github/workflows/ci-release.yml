@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 env:
   DEFAULT_UV_VERSION: "0.13.x"
-  DEFAULT_PYTHON_VERSION: "3.12"
+  DEFAULT_PYTHON_VERSION: "3.15"
 permissions: {}
 jobs:
   wait-for-docker:
@@ -71,7 +71,7 @@ jobs:
           uv sync --python "${PYTHON_VERSION}" --dev --frozen
       - name: Install system dependencies
         timeout-minutes: 12
-        uses: $/.github/actions/apt-install
+        uses: ./.github/actions/apt-install
         with:
           packages: gettext libleptonica6
       # ---- Build Documentation ----
@@ -87,7 +87,7 @@ jobs:
       # ---- Prepare Release ----
       - name: Generate requirements file
         run: |
-          uv export --quiet --no-dev --all-extras --emit-index-url --format requirements-txt --output-file requirements.txt
+          uv export --locked --quiet --no-dev --all-extras --emit-index-url --format requirements-txt --output-file requirements.txt
       - name: Compile messages
         env:
           PAPERLESS_SECRET_KEY: "ci-release-not-a-real-secret"
@@ -112,6 +112,7 @@ jobs:
 
           for file_name in .dockerignore \
                           .env \
+                          .python-version \
                           Dockerfile \
                           pyproject.toml \
                           uv.lock \
@@ -164,11 +165,11 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "version=${REF_NAME}" >> $GITHUB_OUTPUT
+          echo "version=${REF_NAME}" >> "$GITHUB_OUTPUT"
           if [[ "${REF_NAME}" == *"-beta.rc"* ]]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Create release and changelog
         id: create-release

@@ -30,7 +30,8 @@ logger = logging.getLogger("paperless.search")
 # v3 - barcodes JSON field for stored barcode contents
 # v4 - root documents only. Earlier indexes may hold document versions under
 #      their own id and metadata, so they are rebuilt without them.
-SCHEMA_VERSION: Final[int] = 4
+# v5 - Tantivy 0.27 updates stemming; rebuild so stored and queried terms agree.
+SCHEMA_VERSION: Final[int] = 5
 
 # Present in the index directory from the moment a full rebuild starts until it
 # finishes. If a rebuild is interrupted it is left behind, so the half-built

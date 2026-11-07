@@ -30,7 +30,7 @@ RUN set -eux \
 # Purpose: Installs s6-overlay and rootfs
 # Comments:
 #  - Don't leave anything extra in here either
-FROM ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim@sha256:d8e732839dfc4225a1ff698803b478b2223c05636c055d3add41ab9dbec0f315 AS s6-overlay-base
+FROM ghcr.io/astral-sh/uv:0.13.5-python3.15-trixie-slim@sha256:86a05dd8f19b21368fbb160c7e2ad0576780bebbe89114b6deeba2506f7612e1 AS s6-overlay-base
 
 WORKDIR /usr/src/s6
 
@@ -182,6 +182,8 @@ COPY --chown=1000:1000 ["pyproject.toml", "uv.lock", "/usr/src/paperless/src/"]
 # dependencies
 ARG BUILD_PACKAGES="\
   build-essential \
+  # psycopg-c builds from source on Python 3.15
+  libpq-dev \
   # https://github.com/PyMySQL/mysqlclient#linux
   default-libmysqlclient-dev \
   pkg-config"
@@ -192,7 +194,7 @@ RUN set -eux \
     && apt-get update \
     && apt-get install --yes --quiet --no-install-recommends ${BUILD_PACKAGES} \
   && echo "Installing Python requirements" \
-    && uv export --quiet --no-dev --all-extras --format requirements-txt --output-file requirements.txt \
+    && uv export --locked --quiet --no-dev --all-extras --format requirements-txt --output-file requirements.txt \
     && uv pip install --no-cache --system --no-python-downloads --python-preference system \
       --index https://pypi.org/simple \
       --index https://download.pytorch.org/whl/cpu \

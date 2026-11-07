@@ -13,7 +13,7 @@ If you want to implement something big:
 
 ## Python
 
-Paperless-ngx currently supports Python 3.11, 3.12, 3.13, and 3.14. As a policy, we aim to support at least the three most recent Python versions, and drop support for versions as they reach end-of-life. Older versions may be supported if dependencies permit, but this is not guaranteed.
+Paperless-ngx uses CPython 3.15 by default for development and Docker images, and supports Python 3.11 through 3.15. The repository's `.python-version` selects 3.15 for uv. As a policy, we aim to support at least the three most recent Python versions, and drop support for versions as they reach end-of-life. Older versions may be supported if dependencies permit, but this is not guaranteed.
 
 We format Python code with [ruff](https://docs.astral.sh/ruff/formatter/).
 

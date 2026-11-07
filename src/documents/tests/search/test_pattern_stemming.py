@@ -110,8 +110,8 @@ class TestPrefixStemming:
               path to do it: measured under "en", the stemmer leaves
               "librar" alone, so it has one form, and that form is a
               prefix of the "librari" the index holds for "library";
-              "univers" stems to the *shorter* "univ", and the run as
-              typed and its stem are both prefixes of the "univers" the
+              "univers" stems to the *shorter* "univer", and the run as
+              typed and its stem are both prefixes of the "universiti" the
               index holds for "university". The case where the two forms
               genuinely diverge, and only one of them matches, is
               test_stem_substitution_reaches_both_the_inflection_and_the_compound
@@ -125,21 +125,21 @@ class TestPrefixStemming:
     ) -> None:
         """
         GIVEN:
-            - The same indexed document, storing "university" as "univers"
+            - The same indexed document, storing "electricity" as "electr"
         WHEN:
-            - "universities*", "universit*" and "univers*" are each queried
+            - "electricity*", "electricit*" and "electr*" are each queried
         THEN:
-            - "universities*" matches, since the stem of "universities" is
-              that same "univers"; "universit*" matches nothing, since
-              "universit" is a prefix of neither its own stem nor the
-              stored term. The alternatives widen recall without turning
+            - "electricity*" matches through its stem "electr", whereas
+              "electricit*" matches nothing: its literal run stays
+              "electricit", which is not a prefix of the stored term.
+              The alternatives widen recall without turning
               a wildcard into a prefix search over the original text.
-              usage.md tells a reader whose `universit*` finds nothing to
-              shorten it to `univers*`, which matches
+              usage.md tells a reader whose `electricit*` finds nothing to
+              shorten it to `electr*`, which matches
         """
-        assert matched_ids("universities*") == {indexed_doc.id}
-        assert matched_ids("universit*") == set()
-        assert matched_ids("univers*") == {indexed_doc.id}
+        assert matched_ids("electricity*") == {indexed_doc.id}
+        assert matched_ids("electricit*") == set()
+        assert matched_ids("electr*") == {indexed_doc.id}
 
     def test_pattern_past_the_stem_boundary_is_documented_not_fixed(
         self,

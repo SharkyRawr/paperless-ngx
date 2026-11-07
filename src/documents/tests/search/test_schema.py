@@ -59,6 +59,24 @@ class TestNeedsRebuild:
         )
         assert needs_rebuild(paperless_dirs.index_dir) is True
 
+    def test_rebuilds_index_from_before_tantivy_stemmer_upgrade(
+        self,
+        paperless_dirs: PaperlessDirs,
+        settings: Settings,
+    ) -> None:
+        """Rebuild v4 terms even when the fields and language still match."""
+        settings.SEARCH_LANGUAGE = "en"
+        (paperless_dirs.index_dir / ".index_settings.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 4,
+                    "language": "en",
+                    "schema_fingerprint": schema_fingerprint(),
+                },
+            ),
+        )
+        assert needs_rebuild(paperless_dirs.index_dir) is True
+
     def test_returns_true_when_version_is_not_an_integer(
         self,
         paperless_dirs: PaperlessDirs,

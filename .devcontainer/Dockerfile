@@ -81,7 +81,7 @@ RUN set -eux \
     && apt-get update \
     && apt-get install --yes --quiet ${PYTHON_PACKAGES}
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.10 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/uv
 
 
 RUN set -eux \
