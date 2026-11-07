@@ -2123,6 +2123,11 @@ the full OCR endpoint URL for a compatible proxy.
     searchable PDF archive. The original PDF or image is retained. Remote OCR
     runs even when archive generation is disabled.
 
+    Mistral returns Markdown, which Paperless retains in document content after
+    removing generated image-crop references. Azure is configured to return
+    plain text. See [Mistral AI usage](usage.md#mistral-ai) for the request
+    options, output format, limits, and reprocessing behavior.
+
 #### [`PAPERLESS_REMOTE_OCR_MODE=<str>`](#PAPERLESS_REMOTE_OCR_MODE) {#PAPERLESS_REMOTE_OCR_MODE}
 
 : Which documents are sent to the remote OCR engine.

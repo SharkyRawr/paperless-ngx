@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -430,6 +431,11 @@ class RemoteDocumentParser:
                             document_type: f"data:{mime_type};base64,{encoded}",
                         },
                         "include_image_base64": False,
+                        "include_blocks": False,
+                        # Keep tables, headers, and footers in the page Markdown.
+                        "table_format": None,
+                        "extract_header": False,
+                        "extract_footer": False,
                     },
                 )
                 response.raise_for_status()
@@ -450,10 +456,25 @@ class RemoteDocumentParser:
             ):
                 raise ValueError("Invalid OCR pages")
 
-            return "\n\n".join(
-                page["markdown"]
-                for page in sorted(pages, key=lambda page: page["index"])
-            )
+            texts = []
+            for page in sorted(pages, key=lambda page: page["index"]):
+                markdown = page["markdown"]
+                images = page.get("images", [])
+                if not isinstance(images, list) or any(
+                    not isinstance(image, dict)
+                    or not isinstance(image.get("id"), str)
+                    or not image["id"]
+                    for image in images
+                ):
+                    raise ValueError("Invalid OCR images")
+                for image in images:
+                    image_id = image["id"]
+                    # These refer to image crops we do not store, not document text.
+                    markdown = markdown.replace(f"![{image_id}]({image_id})", "")
+                texts.append(markdown.strip())
+
+            text = re.sub(r"\n{3,}", "\n\n", "\n\n".join(texts))
+            return post_process_text(text) or ""
         except httpx.HTTPStatusError as e:
             # Response bodies can echo document content; only expose the status.
             raise ParseError(

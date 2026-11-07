@@ -86,7 +86,10 @@ def test_mistral_pdf_request_and_page_order(
     payload = json.loads(request.content)
     assert payload["model"] == model
     assert payload["include_image_base64"] is False
-    assert "table_format" not in payload  # Keep tables inline with the page text.
+    assert payload["include_blocks"] is False
+    assert payload["table_format"] is None
+    assert payload["extract_header"] is False
+    assert payload["extract_footer"] is False
     assert payload["document"]["type"] == "document_url"
     data_url = payload["document"]["document_url"]
     assert data_url.startswith("data:application/pdf;base64,")
@@ -122,6 +125,88 @@ def test_mistral_blank_page_is_valid(
     httpx_mock.add_response(json={"pages": [{"index": 0, "markdown": ""}]})
     remote_parser.parse(simple_digital_pdf_file, "application/pdf")
     assert remote_parser.get_text() == ""
+
+
+@pytest.mark.parametrize("model", RemoteOCRModel.values)
+def test_mistral_removes_image_crops_without_changing_tables_or_captions(
+    model: str,
+    settings: Settings,
+    remote_parser: RemoteDocumentParser,
+    simple_digital_pdf_file: Path,
+    httpx_mock: HTTPXMock,
+) -> None:
+    settings.REMOTE_OCR_MODEL = model
+    table = "| Item | Value | Unit |\n| --- | --- | --- |\n| Example | ↑ 12.3 | µg/l |"
+    httpx_mock.add_response(
+        json={
+            "pages": [
+                {
+                    "index": 0,
+                    "markdown": (
+                        "# Report\n\n![img-0.jpeg](img-0.jpeg)\n\n"
+                        f"Printed barcode caption\n\n{table}\n\n"
+                        "Keep [img-0.jpeg](img-0.jpeg) and "
+                        "![original](original.jpeg).\n\nFooter"
+                    ),
+                    "images": [{"id": "img-0.jpeg", "image_base64": None}],
+                    "tables": [],
+                    "header": None,
+                    "footer": None,
+                    "blocks": [{"content": "Duplicate content from OCR 4.1"}],
+                },
+                {
+                    "index": 1,
+                    "markdown": "Before ![img-0.jpeg](img-0.jpeg) after\n\nEnd",
+                    "images": [{"id": "img-0.jpeg", "image_base64": None}],
+                },
+            ],
+        },
+    )
+
+    remote_parser.parse(simple_digital_pdf_file, "application/pdf")
+
+    assert remote_parser.get_text() == (
+        f"# Report\n\nPrinted barcode caption\n\n{table}\n\n"
+        "Keep [img-0.jpeg](img-0.jpeg) and ![original](original.jpeg).\n\nFooter"
+        "\n\nBefore after\n\nEnd"
+    )
+
+
+def test_mistral_image_only_page_has_empty_text(
+    remote_parser: RemoteDocumentParser,
+    simple_digital_pdf_file: Path,
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        json={
+            "pages": [
+                {
+                    "index": 0,
+                    "markdown": "![img-0.jpeg](img-0.jpeg)",
+                    "images": [{"id": "img-0.jpeg"}],
+                },
+            ],
+        },
+    )
+    remote_parser.parse(simple_digital_pdf_file, "application/pdf")
+    assert remote_parser.get_text() == ""
+
+
+@pytest.mark.parametrize(
+    "images",
+    [None, "invalid", [None], [{}], [{"id": 1}], [{"id": ""}]],
+)
+def test_mistral_invalid_image_metadata_fails_consumption(
+    images,
+    remote_parser: RemoteDocumentParser,
+    simple_digital_pdf_file: Path,
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        json={"pages": [{"index": 0, "markdown": "text", "images": images}]},
+    )
+    with pytest.raises(ParseError, match="Mistral OCR parsing failed"):
+        remote_parser.parse(simple_digital_pdf_file, "application/pdf")
 
 
 @pytest.mark.parametrize(
