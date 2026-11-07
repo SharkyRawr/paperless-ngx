@@ -12,6 +12,7 @@ from rest_framework.test import APITestCase
 
 from paperless.models import ApplicationConfiguration
 from paperless.models import ColorConvertChoices
+from paperless.models import RemoteOCRModel
 from paperless_testing.dirs import DirectoriesMixin
 from paperless_testing.factories import UserFactory
 from paperless_testing.http import read_streaming_response
@@ -78,6 +79,7 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
                 "remote_ocr_engine": None,
                 "remote_ocr_api_key": None,
                 "remote_ocr_endpoint": None,
+                "remote_ocr_model": None,
                 "remote_ocr_mode": None,
                 "ai_enabled": None,
                 "llm_embedding_backend": None,
@@ -1009,6 +1011,43 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         config.refresh_from_db()
         self.assertEqual(config.llm_api_key, None)
+
+    def test_update_mistral_ocr_config(self) -> None:
+        for model in RemoteOCRModel.values:
+            with self.subTest(model=model):
+                response = self.client.patch(
+                    f"{self.ENDPOINT}1/",
+                    {
+                        "remote_ocr_engine": "mistral",
+                        "remote_ocr_model": model,
+                        "remote_ocr_api_key": "mistral-test-key",
+                        "remote_ocr_endpoint": "",
+                    },
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(response.data["remote_ocr_engine"], "mistral")
+                self.assertEqual(response.data["remote_ocr_model"], model)
+                self.assertNotEqual(
+                    response.data["remote_ocr_api_key"],
+                    "mistral-test-key",
+                )
+                config = ApplicationConfiguration.objects.get(pk=1)
+                self.assertEqual(config.remote_ocr_model, model)
+                self.assertTrue(
+                    self.client.get("/api/ui_settings/").data["settings"]["remote_ocr"][
+                        "configured"
+                    ],
+                )
+
+    def test_update_remote_ocr_model_rejects_unknown_model(self) -> None:
+        response = self.client.patch(
+            f"{self.ENDPOINT}1/",
+            {"remote_ocr_model": "unknown-model"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("remote_ocr_model", response.data)
 
     def test_update_remote_ocr_api_key(self) -> None:
         """

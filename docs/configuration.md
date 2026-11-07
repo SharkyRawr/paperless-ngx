@@ -2093,7 +2093,8 @@ password. All of these options come from their similarly-named [Django settings]
 
 #### [`PAPERLESS_REMOTE_OCR_ENGINE=<str>`](#PAPERLESS_REMOTE_OCR_ENGINE) {#PAPERLESS_REMOTE_OCR_ENGINE}
 
-: The remote OCR engine to use. Currently only Azure AI is supported as "azureai".
+: The remote OCR engine to use: `azureai` for Azure AI Document Intelligence or
+`mistral` for Mistral AI.
 
     Defaults to None, which disables remote OCR.
 
@@ -2106,8 +2107,21 @@ password. All of these options come from their similarly-named [Django settings]
 #### [`PAPERLESS_REMOTE_OCR_ENDPOINT=<str>`](#PAPERLESS_REMOTE_OCR_ENDPOINT) {#PAPERLESS_REMOTE_OCR_ENDPOINT}
 
 : The endpoint to use for the remote OCR engine. This is required for Azure AI.
+For Mistral, leave this unset to use `https://api.mistral.ai/v1/ocr`, or supply
+the full OCR endpoint URL for a compatible proxy.
 
     Defaults to None.
+
+#### [`PAPERLESS_REMOTE_OCR_MODEL=<str>`](#PAPERLESS_REMOTE_OCR_MODEL) {#PAPERLESS_REMOTE_OCR_MODEL}
+
+: The model to use with the Mistral engine. Ignored by Azure AI.
+
+    - `mistral-ocr-4-1`: Mistral OCR 4.1 (default).
+    - `mistral-ocr-2512`: Mistral OCR 3.
+
+    Mistral extracts text for indexing and workflows but does not create a
+    searchable PDF archive. The original PDF or image is retained. Remote OCR
+    runs even when archive generation is disabled.
 
 #### [`PAPERLESS_REMOTE_OCR_MODE=<str>`](#PAPERLESS_REMOTE_OCR_MODE) {#PAPERLESS_REMOTE_OCR_MODE}
 

@@ -80,6 +80,12 @@ class RemoteOCREngine(models.TextChoices):
     """
 
     AZURE_AI = ("azureai", _("Azure AI Document Intelligence"))
+    MISTRAL = ("mistral", _("Mistral AI"))
+
+
+class RemoteOCRModel(models.TextChoices):
+    MISTRAL_OCR_4_1 = ("mistral-ocr-4-1", _("Mistral OCR 4.1"))
+    MISTRAL_OCR_3 = ("mistral-ocr-2512", _("Mistral OCR 3"))
 
 
 class RemoteOCRMode(models.TextChoices):
@@ -336,6 +342,15 @@ class ApplicationConfiguration(AbstractSingletonModel):
         blank=True,
         null=True,
         max_length=256,
+    )
+
+    # PAPERLESS_REMOTE_OCR_MODEL
+    remote_ocr_model = models.CharField(
+        verbose_name=_("Sets the remote OCR model"),
+        blank=True,
+        null=True,
+        max_length=64,
+        choices=RemoteOCRModel.choices,
     )
 
     # PAPERLESS_REMOTE_OCR_MODE

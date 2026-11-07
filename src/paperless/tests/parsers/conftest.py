@@ -120,6 +120,7 @@ def empty_remote_ocr_app_config(mocker: MockerFixture) -> MagicMock:
         remote_ocr_engine=None,
         remote_ocr_api_key=None,
         remote_ocr_endpoint=None,
+        remote_ocr_model=None,
         remote_ocr_mode=None,
     )
     mocker.patch(

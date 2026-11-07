@@ -190,6 +190,7 @@ describe('ConfigComponent', () => {
       'remote_ocr_engine',
       'remote_ocr_api_key',
       'remote_ocr_endpoint',
+      'remote_ocr_model',
       'remote_ocr_mode',
     ])
   })

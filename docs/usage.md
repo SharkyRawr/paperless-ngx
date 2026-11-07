@@ -1194,10 +1194,11 @@ how regularly you intend to scan documents and use paperless.
 
     This feature is disabled by default and will always remain strictly "opt-in".
 
-Paperless-ngx supports performing OCR on documents using remote services. At the moment, this is limited to
-[Microsoft's Azure "Document Intelligence" service](https://azure.microsoft.com/en-us/products/ai-services/ai-document-intelligence).
-This is of course a paid service (with a free tier) which requires an Azure account and subscription. Azure AI is not affiliated with
-Paperless-ngx in any way. When enabled, Paperless-ngx will automatically send appropriate documents to Azure for OCR processing, bypassing
+Paperless-ngx supports performing OCR on documents using
+[Microsoft's Azure "Document Intelligence" service](https://azure.microsoft.com/en-us/products/ai-services/ai-document-intelligence)
+and [Mistral AI](https://docs.mistral.ai/capabilities/document_ai/basic_ocr).
+These services require an account and API key and may incur charges. Neither service is affiliated with
+Paperless-ngx. When enabled, Paperless-ngx sends appropriate documents to the configured service for OCR processing, bypassing
 the local OCR engine. See the [configuration](configuration.md#PAPERLESS_REMOTE_OCR_ENGINE) options for more details. These
 settings can be supplied as environment variables or via **Application Configuration**.
 
@@ -1210,6 +1211,34 @@ unless a [remote OCR workflow action](#workflow-action-remote-ocr) enables it fo
 engine to particular documents.
 
 Setting the mode to `workflow_only` also allows the **Reprocess** actions to selectively use remote OCR for individual documents.
+
+### Mistral AI
+
+Select `mistral` as the **Remote OCR Engine** and enter your Mistral API key in
+**Application Configuration**, or set:
+
+```ini
+PAPERLESS_REMOTE_OCR_ENGINE=mistral
+PAPERLESS_REMOTE_OCR_API_KEY=your-api-key
+PAPERLESS_REMOTE_OCR_MODEL=mistral-ocr-4-1
+```
+
+The endpoint defaults to `https://api.mistral.ai/v1/ocr`.
+[OCR 4.1](https://docs.mistral.ai/models/ocr-4-1) is the default model; select
+`mistral-ocr-2512` to use [OCR 3](https://docs.mistral.ai/models/ocr-3-25-12).
+Both models support PDFs and the images supported by the remote parser (PNG,
+JPEG, TIFF, BMP, GIF, and WebP). Documents are sent directly in the OCR request;
+Paperless does not create a persistent upload through Mistral's Files API.
+
+Mistral's page Markdown, including inline tables, becomes the document content
+used for search and workflows. The original file and its thumbnail remain
+available, but Mistral does **not** produce a searchable PDF archive or add a
+text layer to the original. OCR still runs when archive generation is disabled,
+including for PDFs with existing text. Azure's archive behavior is unchanged.
+
+Mistral currently limits requests to 50 MB and 1,000 pages. Paperless does not
+split oversized documents automatically. API errors, including rate limits,
+fail consumption so the document can be retried through the existing task flow.
 
 ## Architecture
 

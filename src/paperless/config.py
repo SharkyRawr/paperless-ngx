@@ -212,6 +212,7 @@ class RemoteOCRConfig(BaseConfig):
     remote_ocr_engine: str | None = dataclasses.field(init=False)
     remote_ocr_api_key: str | None = dataclasses.field(init=False)
     remote_ocr_endpoint: str | None = dataclasses.field(init=False)
+    remote_ocr_model: str = dataclasses.field(init=False)
     remote_ocr_mode: RemoteOCRMode = dataclasses.field(init=False)
 
     def __post_init__(self) -> None:
@@ -226,6 +227,7 @@ class RemoteOCRConfig(BaseConfig):
         self.remote_ocr_endpoint = (
             app_config.remote_ocr_endpoint or settings.REMOTE_OCR_ENDPOINT
         )
+        self.remote_ocr_model = app_config.remote_ocr_model or settings.REMOTE_OCR_MODEL
         self.remote_ocr_mode = app_config.remote_ocr_mode or RemoteOCRMode(
             settings.REMOTE_OCR_MODE,
         )

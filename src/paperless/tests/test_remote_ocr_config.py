@@ -21,6 +21,7 @@ def null_app_config(mocker) -> MagicMock:
         remote_ocr_engine=None,
         remote_ocr_api_key=None,
         remote_ocr_endpoint=None,
+        remote_ocr_model=None,
         remote_ocr_mode=None,
     )
 
@@ -49,11 +50,13 @@ class TestRemoteOCRConfig:
             REMOTE_OCR_ENGINE="azureai",
             REMOTE_OCR_API_KEY="env-key",
             REMOTE_OCR_ENDPOINT="https://env.cognitiveservices.azure.com",
+            REMOTE_OCR_MODEL="mistral-ocr-2512",
             REMOTE_OCR_MODE=RemoteOCRMode.WORKFLOW_ONLY,
         )
         assert cfg.remote_ocr_engine == "azureai"
         assert cfg.remote_ocr_api_key == "env-key"
         assert cfg.remote_ocr_endpoint == "https://env.cognitiveservices.azure.com"
+        assert cfg.remote_ocr_model == "mistral-ocr-2512"
         assert cfg.remote_ocr_mode == RemoteOCRMode.WORKFLOW_ONLY
 
     def test_app_config_takes_precedence(
@@ -65,6 +68,7 @@ class TestRemoteOCRConfig:
             remote_ocr_engine="azureai",
             remote_ocr_api_key="db-key",
             remote_ocr_endpoint="https://db.cognitiveservices.azure.com",
+            remote_ocr_model="mistral-ocr-2512",
             remote_ocr_mode=RemoteOCRMode.WORKFLOW_ONLY,
         )
         cfg = make_remote_ocr_config(
@@ -72,11 +76,13 @@ class TestRemoteOCRConfig:
             REMOTE_OCR_ENGINE=None,
             REMOTE_OCR_API_KEY="env-key",
             REMOTE_OCR_ENDPOINT="https://env.cognitiveservices.azure.com",
+            REMOTE_OCR_MODEL="mistral-ocr-4-1",
             REMOTE_OCR_MODE=RemoteOCRMode.ALWAYS,
         )
         assert cfg.remote_ocr_engine == "azureai"
         assert cfg.remote_ocr_api_key == "db-key"
         assert cfg.remote_ocr_endpoint == "https://db.cognitiveservices.azure.com"
+        assert cfg.remote_ocr_model == "mistral-ocr-2512"
         assert cfg.remote_ocr_mode == RemoteOCRMode.WORKFLOW_ONLY
 
     def test_unset_everywhere(
@@ -93,6 +99,7 @@ class TestRemoteOCRConfig:
         assert cfg.remote_ocr_engine is None
         assert cfg.remote_ocr_api_key is None
         assert cfg.remote_ocr_endpoint is None
+        assert cfg.remote_ocr_model == "mistral-ocr-4-1"
 
 
 class TestRemoteOCRByDefault:

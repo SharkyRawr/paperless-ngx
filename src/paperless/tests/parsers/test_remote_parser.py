@@ -253,6 +253,7 @@ class TestRemoteParserScore:
 
 
 class TestRemoteParserProperties:
+    @pytest.mark.usefixtures("azure_settings")
     def test_can_produce_archive_is_true(
         self,
         remote_parser: RemoteDocumentParser,

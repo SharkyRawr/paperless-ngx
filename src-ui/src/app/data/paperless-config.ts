@@ -71,6 +71,12 @@ export const LLMBackendConfig = {
 
 export const RemoteOCREngineConfig = {
   AZURE_AI: 'azureai',
+  MISTRAL: 'mistral',
+}
+
+export const RemoteOCRModelConfig = {
+  MISTRAL_OCR_4_1: 'mistral-ocr-4-1',
+  MISTRAL_OCR_3: 'mistral-ocr-2512',
 }
 
 export const RemoteOCRModeConfig = {
@@ -220,7 +226,17 @@ export const PaperlessConfigOptions: ConfigOption[] = [
     config_key: 'PAPERLESS_REMOTE_OCR_ENDPOINT',
     category: ConfigCategory.OCR,
     section: ConfigSection.RemoteOCR,
-    note: $localize`Required when using the Azure AI engine.`,
+    note: $localize`Required for Azure AI. For Mistral, defaults to https://api.mistral.ai/v1/ocr.`,
+  },
+  {
+    key: 'remote_ocr_model',
+    title: $localize`Remote OCR Model`,
+    type: ConfigOptionType.Select,
+    choices: mapToItems(RemoteOCRModelConfig),
+    config_key: 'PAPERLESS_REMOTE_OCR_MODEL',
+    category: ConfigCategory.OCR,
+    section: ConfigSection.RemoteOCR,
+    note: $localize`Mistral only. Defaults to Mistral OCR 4.1 (mistral-ocr-4-1). Use mistral-ocr-2512 for OCR 3. Extracts text for search without generating a searchable PDF archive.`,
   },
   {
     key: 'remote_ocr_mode',
@@ -469,6 +485,7 @@ export interface PaperlessConfig extends ObjectWithId {
   remote_ocr_engine: string
   remote_ocr_api_key: string
   remote_ocr_endpoint: string
+  remote_ocr_model: string
   remote_ocr_mode: string
   ai_enabled: boolean
   llm_embedding_backend: string

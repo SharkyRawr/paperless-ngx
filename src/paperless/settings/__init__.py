@@ -1201,6 +1201,11 @@ WEBHOOKS_ALLOW_INTERNAL_REQUESTS = get_bool_from_env(
 REMOTE_OCR_ENGINE = os.getenv("PAPERLESS_REMOTE_OCR_ENGINE")
 REMOTE_OCR_API_KEY = os.getenv("PAPERLESS_REMOTE_OCR_API_KEY")
 REMOTE_OCR_ENDPOINT = os.getenv("PAPERLESS_REMOTE_OCR_ENDPOINT")
+REMOTE_OCR_MODEL = get_choice_from_env(
+    "PAPERLESS_REMOTE_OCR_MODEL",
+    {"mistral-ocr-4-1", "mistral-ocr-2512"},
+    default="mistral-ocr-4-1",
+)
 REMOTE_OCR_MODE = get_choice_from_env(
     "PAPERLESS_REMOTE_OCR_MODE",
     {"always", "workflow_only"},

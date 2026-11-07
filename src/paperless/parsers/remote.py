@@ -1,11 +1,10 @@
 """
 Built-in remote-OCR document parser.
 
-Handles documents by sending them to a configured remote OCR engine
-(currently Azure AI Vision / Document Intelligence) and retrieving both
-the extracted text and a searchable PDF with an embedded text layer. For
-born-digital PDFs that need no archive copy, the remote call is skipped
-entirely in favor of locally-extracted text (see ``RemoteDocumentParser.parse``).
+Handles documents by sending them to Azure AI Document Intelligence or
+Mistral AI. Azure also returns a searchable PDF; Mistral returns text only.
+For Azure, PDFs that need no archive copy use locally-extracted text
+(see ``RemoteDocumentParser.parse``).
 
 When no engine is configured, ``score()`` returns ``None`` so the parser
 is effectively invisible to the registry — the tesseract parser handles
@@ -14,6 +13,7 @@ these MIME types instead.
 
 from __future__ import annotations
 
+import base64
 import logging
 import shutil
 import tempfile
@@ -21,9 +21,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Self
 
+import httpx
 from django.conf import settings
 
 from documents.parsers import ParseError
+from paperless.models import RemoteOCRModel
+from paperless.network import create_pinned_httpx_client
 from paperless.parsers.utils import extract_pdf_text
 from paperless.parsers.utils import post_process_text
 from paperless.version import __full_version_str__
@@ -58,10 +61,12 @@ class RemoteEngineConfig:
         engine: str | None,
         api_key: str | None = None,
         endpoint: str | None = None,
+        model: str = RemoteOCRModel.MISTRAL_OCR_4_1,
     ) -> None:
         self.engine = engine
         self.api_key = api_key
         self.endpoint = endpoint
+        self.model = model
 
     @classmethod
     def from_app_config(cls) -> Self:
@@ -73,26 +78,26 @@ class RemoteEngineConfig:
             engine=app_config.remote_ocr_engine,
             api_key=app_config.remote_ocr_api_key,
             endpoint=app_config.remote_ocr_endpoint,
+            model=app_config.remote_ocr_model,
         )
 
     def engine_is_valid(self) -> bool:
         """Return True when the engine is known and fully configured."""
         return (
-            self.engine in ("azureai",)
-            and self.api_key is not None
-            and not (self.engine == "azureai" and self.endpoint is None)
+            self.engine in ("azureai", "mistral")
+            and bool(self.api_key)
+            and (self.engine != "azureai" or bool(self.endpoint))
+            and (self.engine != "mistral" or self.model in RemoteOCRModel.values)
         )
 
 
 class RemoteDocumentParser:
-    """Parse documents via a remote OCR API (currently Azure AI Vision).
+    """Parse documents via Azure AI Document Intelligence or Mistral AI.
 
-    This parser sends documents to a remote engine that returns both
-    extracted text and a searchable PDF with an embedded text layer,
-    except when ``parse()`` is called with ``produce_archive=False`` for
-    a PDF, in which case the remote call is skipped and only locally
-    extracted text is returned (no archive). It does not depend on
-    Tesseract or ocrmypdf.
+    Azure returns text and a searchable PDF, unless ``produce_archive=False``
+    for a PDF, which uses local text extraction instead. Mistral always
+    extracts text remotely and produces no archive. Neither engine depends
+    on Tesseract or ocrmypdf.
 
     Class attributes
     ----------------
@@ -177,18 +182,8 @@ class RemoteDocumentParser:
 
     @property
     def can_produce_archive(self) -> bool:
-        """Whether this parser can produce a searchable PDF archive copy.
-
-        Returns
-        -------
-        bool
-            Always True — the remote engine is capable of returning a PDF
-            with an embedded text layer to serve as the archive copy.
-            Whether it actually does so for a given document depends on
-            ``produce_archive`` passed to :meth:`parse` (see there for when
-            the remote engine call, and thus archive generation, is skipped).
-        """
-        return True
+        """Azure produces searchable PDFs; Mistral only extracts text."""
+        return RemoteEngineConfig.from_app_config().engine != "mistral"
 
     @property
     def requires_pdf_rendition(self) -> bool:
@@ -197,8 +192,7 @@ class RemoteDocumentParser:
         Returns
         -------
         bool
-            Always False — all supported originals are displayable by
-            the browser (PDF) or handled via the archive copy (images).
+            Always False — supported originals can be displayed by the UI.
         """
         return False
 
@@ -243,7 +237,7 @@ class RemoteDocumentParser:
     ) -> None:
         """Send the document to the remote engine and store results.
 
-        When *produce_archive* is False for a PDF, the caller (via
+        For Azure, when *produce_archive* is False for a PDF, the caller (via
         ``documents.consumer.should_produce_archive``) has already determined
         that the document is born-digital and needs no archive — skip the
         remote engine entirely rather than re-OCRing it and creating a
@@ -256,8 +250,8 @@ class RemoteDocumentParser:
         mime_type:
             Detected MIME type of the document.
         produce_archive:
-            Whether an archive copy is wanted. For PDFs, False skips the
-            remote engine and uses locally-extracted text instead.
+            Whether an archive copy is wanted. For Azure PDFs, False uses
+            locally-extracted text. Mistral extracts text regardless of this flag.
         """
         config = RemoteEngineConfig.from_app_config()
 
@@ -266,6 +260,10 @@ class RemoteDocumentParser:
                 "No valid remote parser engine is configured, content will be empty.",
             )
             self._text = ""
+            return
+
+        if config.engine == "mistral":
+            self._text = self._mistral_parse(document_path, mime_type, config)
             return
 
         if not produce_archive and mime_type == "application/pdf":
@@ -311,7 +309,7 @@ class RemoteDocumentParser:
         """Generate a thumbnail image for the document.
 
         Uses the archive PDF produced by the remote engine when available,
-        otherwise falls back to the original document path (PDF inputs).
+        otherwise falls back to the original PDF or image.
 
         Parameters
         ----------
@@ -329,6 +327,13 @@ class RemoteDocumentParser:
         # it will move to paperless.parsers.utils when the tesseract
         # parser is migrated in a later phase.
         from documents.parsers import make_thumbnail_from_pdf
+
+        if self._archive_path is None and mime_type.startswith("image/"):
+            from documents.parsers import encode_thumbnail_webp
+
+            thumbnail = self._tempdir / "convert.webp"
+            encode_thumbnail_webp(document_path, thumbnail)
+            return thumbnail
 
         return make_thumbnail_from_pdf(
             self._archive_path or document_path,
@@ -395,6 +400,69 @@ class RemoteDocumentParser:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _mistral_parse(
+        self,
+        file: Path,
+        mime_type: str,
+        config: RemoteEngineConfig,
+    ) -> str:
+        """Extract page Markdown without uploading a persistent file to Mistral."""
+        endpoint = config.endpoint or "https://api.mistral.ai/v1/ocr"
+        document_type = (
+            "document_url" if mime_type == "application/pdf" else "image_url"
+        )
+        try:
+            with create_pinned_httpx_client(
+                endpoint,
+                allow_internal=settings.REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS,
+                timeout=httpx.Timeout(300, connect=10),
+                follow_redirects=False,
+            ) as client:
+                encoded = base64.b64encode(file.read_bytes()).decode("ascii")
+                response = client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {config.api_key}"},
+                    json={
+                        "model": config.model,
+                        "document": {
+                            "type": document_type,
+                            document_type: f"data:{mime_type};base64,{encoded}",
+                        },
+                        "include_image_base64": False,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+
+            pages = result.get("pages") if isinstance(result, dict) else None
+            if (
+                not isinstance(pages, list)
+                or not pages
+                or any(
+                    not isinstance(page, dict)
+                    or type(page.get("index")) is not int
+                    or page["index"] < 0
+                    or not isinstance(page.get("markdown"), str)
+                    for page in pages
+                )
+                or len({page["index"] for page in pages}) != len(pages)
+            ):
+                raise ValueError("Invalid OCR pages")
+
+            return "\n\n".join(
+                page["markdown"]
+                for page in sorted(pages, key=lambda page: page["index"])
+            )
+        except httpx.HTTPStatusError as e:
+            # Response bodies can echo document content; only expose the status.
+            raise ParseError(
+                f"Mistral OCR request failed (HTTP {e.response.status_code}).",
+            ) from None
+        except (httpx.RequestError, OSError, ValueError) as e:
+            raise ParseError(
+                f"Mistral OCR parsing failed ({type(e).__name__}).",
+            ) from None
 
     def _azure_ai_vision_parse(
         self,
