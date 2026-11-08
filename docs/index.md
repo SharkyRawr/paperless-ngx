@@ -6,8 +6,11 @@ title: Home
 ![image](assets/logo_full_black.svg#only-light){.index-logo}
 ![image](assets/logo_full_eee.svg#only-dark){.index-logo}
 
-**Paperless-ngx** is a _community-supported_ open-source document management system that transforms your
-physical documents into a searchable online archive so you can keep, well, _less paper_.
+**Paperless-ngx — lunabuild** is our fork of the [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx)
+open-source document management system, which transforms physical documents into a searchable online archive.
+We add Mistral OCR support and a newer Python runtime for our own deployment while staying close to upstream.
+We track upstream stable release tags as they become available, bringing them into the `lunabuild` branch
+while retaining the fork-specific changes.
 
 [Get started](setup.md){ .md-button .md-button--primary .index-callout }
 [Demo](https://demo.paperless-ngx.com){ .md-button .md-button--secondary target=\_blank }
@@ -27,6 +30,12 @@ physical documents into a searchable online archive so you can keep, well, _less
 <div class="clear"></div>
 
 ## Features
+
+- **Mistral remote OCR:** Choose OCR 4.1 (the default) or OCR 3 in Application Configuration or through environment variables. Extracted Markdown is available for search and workflows; originals and thumbnails are preserved. Mistral does not generate a searchable PDF archive. See the [Mistral OCR guide](usage.md#mistral-ai) for setup and remote processing details.
+- **Python 3.15:** The default runtime for development, Docker images, CI, and release tooling, with updated dependencies and compatibility fixes. The search dependency update triggers a [one-time index rebuild](administration.md#index).
+- **Fork maintenance:** CI and documentation publishing follow the `lunabuild` branch, which tracks upstream stable release tags as they become available.
+
+---
 
 - **Organize and index** your scanned documents with tags, correspondents, types, and more.
 - _Your_ data is stored locally on _your_ server and is never transmitted or shared in any way, unless you explicitly choose to do so.

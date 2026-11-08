@@ -1,4 +1,5 @@
 <!-- omit in toc -->
+
 # Paperless-ngx — lunabuild fork
 
 This fork of [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) keeps the upstream document management system as its foundation while adding Mistral OCR support and a newer Python runtime for our own deployment. The goal is to carry these focused changes while staying close to upstream. We track upstream stable release tags as they become available and bring those releases into the `lunabuild` branch, retaining the fork-specific changes.
@@ -112,4 +113,3 @@ Please see [the wiki](https://github.com/paperless-ngx/paperless-ngx/wiki/Relate
 
 > Document scanners are typically used to scan sensitive documents like your social insurance number, tax records, invoices, etc. **Paperless-ngx should never be run on an untrusted host** because information is stored in clear text without encryption. No guarantees are made regarding security (but we do try!) and you use the app at your own risk.
 > **The safest way to run Paperless-ngx is on a local server in your own home with backups in place**.
-
