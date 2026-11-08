@@ -1,3 +1,18 @@
+<!-- omit in toc -->
+# Paperless-ngx — lunabuild fork
+
+This fork of [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) keeps the upstream document management system as its foundation while adding Mistral OCR support and a newer Python runtime for our own deployment. The goal is to carry these focused changes while staying close to upstream. We track upstream stable release tags as they become available and bring those releases into the `lunabuild` branch, retaining the fork-specific changes.
+
+## What changed in this fork
+
+- **Mistral remote OCR:** Adds Mistral AI alongside the existing OCR engines, with a choice of OCR 4.1 (the default) or OCR 3 through Application Configuration or environment variables. Extracted Markdown becomes document content for search and workflows. Originals and thumbnails are preserved; Mistral does not generate a searchable PDF archive. See the [Mistral OCR guide](docs/usage.md#mistral-ai) for setup, output behavior, and remote processing details.
+- **Python 3.15:** Makes Python 3.15 the default for development, Docker images, CI, and release tooling, with updated dependencies and compatibility fixes. The search dependency update triggers a one-time index rebuild; see [search index maintenance](docs/administration.md#index).
+- **Fork maintenance:** Adapts CI and documentation publishing to the `lunabuild` branch.
+
+The original upstream README follows below.
+
+---
+
 [![ci](https://github.com/paperless-ngx/paperless-ngx/workflows/ci/badge.svg)](https://github.com/paperless-ngx/paperless-ngx/actions)
 [![Crowdin](https://badges.crowdin.net/paperless-ngx/localized.svg)](https://crowdin.com/project/paperless-ngx)
 [![Documentation Status](https://img.shields.io/github/deployments/paperless-ngx/paperless-ngx/github-pages?label=docs)](https://docs.paperless-ngx.com)
@@ -97,3 +112,4 @@ Please see [the wiki](https://github.com/paperless-ngx/paperless-ngx/wiki/Relate
 
 > Document scanners are typically used to scan sensitive documents like your social insurance number, tax records, invoices, etc. **Paperless-ngx should never be run on an untrusted host** because information is stored in clear text without encryption. No guarantees are made regarding security (but we do try!) and you use the app at your own risk.
 > **The safest way to run Paperless-ngx is on a local server in your own home with backups in place**.
+
