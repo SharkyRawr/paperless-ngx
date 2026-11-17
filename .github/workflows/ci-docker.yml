@@ -7,6 +7,7 @@ on:
     branches:
       - dev
       - beta
+      - lunabuild
   pull_request:
     branches:
       - dev
@@ -63,7 +64,7 @@ jobs:
         run: |
           # should-push: Should we push to GHCR?
           # True for:
-          #   1. Pushes (tags/dev/beta) - filtered via the workflow triggers
+          #   1. Pushes (tags/dev/beta/lunabuild) - filtered via the workflow triggers
           #   2. Manual dispatch - always push to GHCR
           #   3. Internal PRs where the branch name starts with 'feature-' or 'fix-'
 
