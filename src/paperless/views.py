@@ -32,15 +32,16 @@ from rest_framework.fields import BooleanField
 from rest_framework.filters import OrderingFilter
 from rest_framework.generics import GenericAPIView
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import DjangoModelPermissions
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.viewsets import ModelViewSet
 
 from documents.models import PaperlessTask
+from documents.permissions import PaperlessModelPermissions
 from documents.permissions import PaperlessObjectPermissions
 from documents.tasks import llmindex_index
+from paperless.fields import is_obfuscated_password
 from paperless.filters import GroupFilterSet
 from paperless.filters import UserFilterSet
 from paperless.models import ApplicationConfiguration
@@ -260,7 +261,7 @@ class ProfileView(GenericAPIView[Any]):
         user = self.request.user if hasattr(self.request, "user") else None
 
         password = serializer.validated_data.pop("password", None)
-        if password and password.replace("*", ""):
+        if password and not is_obfuscated_password(password):
             user.set_password(password)
             user.save()
 
@@ -414,7 +415,7 @@ class ApplicationConfigurationViewSet(ModelViewSet[ApplicationConfiguration]):
     queryset = ApplicationConfiguration.objects
 
     serializer_class = ApplicationConfigurationSerializer
-    permission_classes = (IsAuthenticated, DjangoModelPermissions)
+    permission_classes = (IsAuthenticated, PaperlessModelPermissions)
 
     @extend_schema(exclude=True)
     def create(self, request, *args, **kwargs):

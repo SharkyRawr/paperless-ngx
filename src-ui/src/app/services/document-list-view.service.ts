@@ -270,11 +270,28 @@ export class DocumentListViewService {
     this.currentPage = viewState.currentPage
   }
 
-  loadSavedView(view: SavedView, closeCurrentView: boolean = false) {
-    if (closeCurrentView) {
-      this._activeSavedViewId = null
-    }
+  /**
+   * Activate a saved view using documents that were already fetched, e.g. by a
+   * dashboard widget. Does not navigate or reload.
+   */
+  activateSavedViewWithDocuments(
+    view: SavedView,
+    documents: Document[],
+    collectionSize: number,
+    pageSize: number
+  ) {
+    this.cancelPending()
+    this.rangeSelectionAnchorIndex = this.lastRangeSelectionToIndex = null
+    this._activeSavedViewId = view.id
+    this.applySavedViewConfig(view)
+    this.activeListViewState.pageSize = pageSize // match the page size the documents were fetched with
+    this.activeListViewState.currentPage = 1
+    this.activeListViewState.documents = documents
+    this.activeListViewState.collectionSize = collectionSize
+    this.markChanged()
+  }
 
+  private applySavedViewConfig(view: SavedView) {
     this.activeListViewState.filterRules = cloneFilterRules(view.filter_rules)
     this.activeListViewState.sortField = view.sort_field
     this.activeListViewState.sortReverse = view.sort_reverse
@@ -284,6 +301,14 @@ export class DocumentListViewService {
     this.activeListViewState.displayMode = view.display_mode
     this.activeListViewState.pageSize = view.page_size
     this.activeListViewState.displayFields = view.display_fields
+  }
+
+  loadSavedView(view: SavedView, closeCurrentView: boolean = false) {
+    if (closeCurrentView) {
+      this._activeSavedViewId = null
+    }
+
+    this.applySavedViewConfig(view)
 
     this.reduceSelectionToFilter()
     this.markChanged()
@@ -355,7 +380,7 @@ export class DocumentListViewService {
               queryParams: paramsFromViewState(activeListViewState),
               replaceUrl: !this.router.routerState.snapshot.url.includes('?'), // in case navigating from params-less /documents
             })
-          } else if (this._activeSavedViewId) {
+          } else if (updateQueryParams && this._activeSavedViewId) {
             this.router.navigate([], {
               queryParams: paramsFromViewState(activeListViewState, true),
               queryParamsHandling: 'merge',
@@ -374,7 +399,7 @@ export class DocumentListViewService {
             // this happens when applying a filter: the current page might not be available anymore due to the reduced result set.
             activeListViewState.currentPage = 1
             this.markChanged()
-            this.reload()
+            this.reload(onFinish, updateQueryParams)
           } else if (
             activeListViewState.sortField.indexOf('custom_field') === 0 &&
             !this.settings

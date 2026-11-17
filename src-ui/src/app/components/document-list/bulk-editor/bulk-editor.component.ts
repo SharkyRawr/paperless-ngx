@@ -19,24 +19,18 @@ import {
   NgbModalRef,
 } from '@ng-bootstrap/ng-bootstrap'
 import { saveAs } from 'file-saver'
-import {
-  first,
-  map,
-  Observable,
-  Subject,
-  switchMap,
-  takeUntil,
-  tap,
-} from 'rxjs'
+import { first, map, Observable, Subject, switchMap, takeUntil } from 'rxjs'
 import { BootstrapIconComponent } from 'src/app/components/common/bootstrap-icon/bootstrap-icon.component'
 import { ConfirmDialogComponent } from 'src/app/components/common/confirm-dialog/confirm-dialog.component'
+import { BulkOperationResponse } from 'src/app/data/bulk-operation'
 import { CustomField } from 'src/app/data/custom-field'
 import { MatchingModel } from 'src/app/data/matching-model'
 import { SelectionDataItem } from 'src/app/data/results'
 import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { Workflow } from 'src/app/data/workflow'
+import { WorkflowTriggerType } from 'src/app/data/workflow-trigger'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import { DocumentListViewService } from 'src/app/services/document-list-view.service'
-import { OpenDocumentsService } from 'src/app/services/open-documents.service'
 import {
   PermissionAction,
   PermissionsService,
@@ -51,19 +45,25 @@ import {
   DocumentService,
   MergeDocumentsRequest,
 } from 'src/app/services/rest/document.service'
-import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { ShareLinkBundleService } from 'src/app/services/rest/share-link-bundle.service'
 import { StoragePathService } from 'src/app/services/rest/storage-path.service'
 import { TagService } from 'src/app/services/rest/tag.service'
+import { WorkflowService } from 'src/app/services/rest/workflow.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { TaskNotificationService } from 'src/app/services/task-notification.service'
 import { ToastService } from 'src/app/services/toast.service'
 import { TrashService } from 'src/app/services/trash.service'
+import {
+  documentOperationHasFollowUpTasks,
+  getDocumentOperationLabel,
+} from 'src/app/utils/document-operation'
 import { flattenTags } from 'src/app/utils/flatten-tags'
 import { queryParamsFromFilterRules } from 'src/app/utils/query-params'
 import { MergeAsVersionsConfirmDialogComponent } from '../../common/confirm-dialog/merge-as-versions-confirm-dialog/merge-as-versions-confirm-dialog.component'
 import { MergeConfirmDialogComponent } from '../../common/confirm-dialog/merge-confirm-dialog/merge-confirm-dialog.component'
 import { ReprocessConfirmDialogComponent } from '../../common/confirm-dialog/reprocess-confirm-dialog/reprocess-confirm-dialog.component'
 import { RotateConfirmDialogComponent } from '../../common/confirm-dialog/rotate-confirm-dialog/rotate-confirm-dialog.component'
+import { RunWorkflowConfirmDialogComponent } from '../../common/confirm-dialog/run-workflow-confirm-dialog/run-workflow-confirm-dialog.component'
 import { CorrespondentEditDialogComponent } from '../../common/edit-dialog/correspondent-edit-dialog/correspondent-edit-dialog.component'
 import { CustomFieldEditDialogComponent } from '../../common/edit-dialog/custom-field-edit-dialog/custom-field-edit-dialog.component'
 import { DocumentTypeEditDialogComponent } from '../../common/edit-dialog/document-type-edit-dialog/document-type-edit-dialog.component'
@@ -104,17 +104,19 @@ export class BulkEditorComponent
   private correspondentService = inject(CorrespondentService)
   list = inject(DocumentListViewService)
   private documentService = inject(DocumentService)
+  private trashService = inject(TrashService)
   private modalService = inject(NgbModal)
-  private openDocumentService = inject(OpenDocumentsService)
   private settings = inject(SettingsService)
   private toastService = inject(ToastService)
-  private trashService = inject(TrashService)
+  private taskNotifications = inject(TaskNotificationService)
   private storagePathService = inject(StoragePathService)
   private customFieldService = inject(CustomFieldsService)
   public readonly permissionService = inject(PermissionsService)
-  private savedViewService = inject(SavedViewService)
   private readonly shareLinkBundleService = inject(ShareLinkBundleService)
+  private readonly workflowService = inject(WorkflowService)
   private readonly router = inject(Router)
+
+  public manualWorkflows: Workflow[] = []
 
   tagSelectionModel = new FilterableDropdownSelectionModel(true)
   correspondentSelectionModel = new FilterableDropdownSelectionModel()
@@ -258,6 +260,20 @@ export class BulkEditorComponent
           (result) => (this.customFieldsSelectionModel.items = result.results)
         )
     }
+    if (
+      this.permissionService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.Workflow
+      )
+    ) {
+      this.workflowService
+        .list(1, 100000, null, null, {
+          trigger_type: WorkflowTriggerType.Manual,
+          enabled: true,
+        })
+        .pipe(first())
+        .subscribe((result) => (this.manualWorkflows = result.results))
+    }
 
     this.downloadForm
       .get('downloadFileTypeArchive')
@@ -286,6 +302,43 @@ export class BulkEditorComponent
     this.unsubscribeNotifier.complete()
   }
 
+  get canRunWorkflow(): boolean {
+    return (
+      this.userCanEditAll && this.userOwnsAll && this.manualWorkflows.length > 0
+    )
+  }
+
+  runWorkflowSelected() {
+    const modal = this.modalService.open(RunWorkflowConfirmDialogComponent, {
+      backdrop: 'static',
+    })
+    modal.componentInstance.title = $localize`Run workflow`
+    modal.componentInstance.message = $localize`Run a workflow on ${this.getSelectionSize()} selected document(s).`
+    modal.componentInstance.btnCaption = $localize`Run`
+    modal.componentInstance.workflows = this.manualWorkflows
+    modal.componentInstance.confirmClicked
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        modal.componentInstance.buttonsEnabled.set(false)
+        this.documentService
+          .bulkEdit(this.getSelectionQuery(), 'run_workflow', {
+            workflow: modal.componentInstance.workflowId,
+            filter_documents: !modal.componentInstance.force,
+          })
+          .pipe(first())
+          .subscribe({
+            next: () => {
+              modal.close()
+              this.list.selectNone()
+              this.toastService.showInfo(
+                $localize`Workflow will run on the selected documents in the background.`
+              )
+            },
+            error: (error) => this.handleOperationError(modal, error),
+          })
+      })
+  }
+
   private executeBulkEditMethod(
     modal: NgbModalRef,
     method: DocumentBulkEditMethod,
@@ -299,46 +352,60 @@ export class BulkEditorComponent
       .bulkEdit(overrideSelection ?? this.getSelectionQuery(), method, args)
       .pipe(first())
       .subscribe({
-        next: () => this.handleOperationSuccess(modal),
+        next: ({ task_id }) =>
+          this.handleOperationQueued(modal, task_id, method),
         error: (error) => this.handleOperationError(modal, error),
       })
   }
 
+  private handleOperationQueued(
+    modal: NgbModalRef,
+    taskId: string,
+    operation: string,
+    onQueued?: (taskId: string) => void
+  ) {
+    const bulk = this.getSelectionSize() > 1
+    modal?.close()
+    this.list.selectNone()
+    if (onQueued) {
+      onQueued(taskId)
+    } else {
+      const label = getDocumentOperationLabel(operation)
+      const submittedMessage = bulk
+        ? $localize`Bulk operation '${label}' submitted for processing.`
+        : $localize`Operation '${label}' submitted for processing.`
+      const completedMessage = bulk
+        ? $localize`Bulk operation '${label}' completed.`
+        : $localize`Operation '${label}' completed.`
+      this.taskNotifications.showQueued(
+        taskId,
+        bulk
+          ? $localize`Bulk operation '${label}' queued.`
+          : $localize`Operation '${label}' queued.`,
+        {
+          content: documentOperationHasFollowUpTasks(operation)
+            ? submittedMessage
+            : completedMessage,
+        }
+      )
+    }
+  }
+
   private executeDocumentAction(
     modal: NgbModalRef,
-    request: Observable<any>,
-    options: { clearSelection?: boolean; successMessage?: string } = {}
+    operation: string,
+    request: Observable<BulkOperationResponse>,
+    onQueued?: (taskId: string) => void
   ) {
     if (modal) {
       modal.componentInstance.buttonsEnabled.set(false)
     }
     request.pipe(first()).subscribe({
-      next: () => {
-        this.handleOperationSuccess(modal, options.clearSelection ?? false)
-        if (options.successMessage) {
-          this.toastService.showSuccess(options.successMessage)
-        }
+      next: ({ task_id }) => {
+        this.handleOperationQueued(modal, task_id, operation, onQueued)
       },
       error: (error) => this.handleOperationError(modal, error),
     })
-  }
-
-  private handleOperationSuccess(
-    modal: NgbModalRef,
-    clearSelection: boolean = false
-  ) {
-    if (clearSelection) {
-      this.list.selected.clear()
-    }
-    this.list.reload()
-    this.list.reduceSelectionToFilter()
-    this.list.selected.forEach((id) => {
-      this.openDocumentService.refreshDocument(id)
-    })
-    this.savedViewService.maybeRefreshDocumentCounts()
-    if (modal) {
-      modal.close()
-    }
   }
 
   private handleOperationError(modal: NgbModalRef, error: any) {
@@ -908,16 +975,9 @@ export class BulkEditorComponent
     const count = this.getSelectionSize()
     this.executeDocumentAction(
       modal,
-      this.documentService
-        .deleteDocuments(this.getSelectionQuery())
-        .pipe(
-          tap(() =>
-            this.trashService.notifyMovedToTrash(
-              $localize`Moved ${count} document(s) to the trash`,
-              documents
-            )
-          )
-        )
+      'delete',
+      this.documentService.deleteDocuments(this.getSelectionQuery()),
+      (taskId) => this.trashService.trackMovedToTrash(taskId, count, documents)
     )
   }
 
@@ -958,6 +1018,7 @@ export class BulkEditorComponent
         modal.componentInstance.buttonsEnabled.set(false)
         this.executeDocumentAction(
           modal,
+          'reprocess',
           this.documentService.reprocessDocuments(
             this.getSelectionQuery(),
             modal.componentInstance.remoteOcr
@@ -998,6 +1059,7 @@ export class BulkEditorComponent
         rotateDialog.buttonsEnabled.set(false)
         this.executeDocumentAction(
           modal,
+          'rotate',
           this.documentService.rotateDocuments(
             this.getSelectionQuery(),
             rotateDialog.degrees
@@ -1031,11 +1093,8 @@ export class BulkEditorComponent
         mergeDialog.buttonsEnabled.set(false)
         this.executeDocumentAction(
           modal,
-          this.documentService.mergeDocuments(mergeDialog.documentIDs(), args),
-          { clearSelection: !!args.delete_originals }
-        )
-        this.toastService.showInfo(
-          $localize`Merged document will be queued for consumption.`
+          'merge',
+          this.documentService.mergeDocuments(mergeDialog.documentIDs(), args)
         )
       })
   }
@@ -1057,14 +1116,11 @@ export class BulkEditorComponent
       .subscribe(() => {
         this.executeDocumentAction(
           modal,
+          'merge_as_versions',
           this.documentService.mergeDocumentsAsVersions(
             mergeDialog.documentIDs(),
             mergeDialog.rootDocumentID()
-          ),
-          {
-            clearSelection: true,
-            successMessage: $localize`Documents merged as versions.`,
-          }
+          )
         )
       })
   }
@@ -1088,14 +1144,9 @@ export class BulkEditorComponent
 
     dialog.selection = this.getSelectionQuery()
     dialog.selectionCount = this.getSelectionSize()
-    dialog.succeeded.subscribe((result) => {
-      this.toastService.showSuccess($localize`Custom fields updated.`)
-      this.list.reload()
-      this.list.reduceSelectionToFilter()
-      this.list.selected.forEach((id) => {
-        this.openDocumentService.refreshDocument(id)
-      })
-    })
+    dialog.succeeded.subscribe(({ task_id }) =>
+      this.handleOperationQueued(null, task_id, 'modify_custom_fields')
+    )
     dialog.failed.subscribe((error) => {
       this.toastService.showError(
         $localize`Error updating custom fields.`,

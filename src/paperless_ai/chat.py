@@ -22,8 +22,8 @@ logger = logging.getLogger("paperless_ai.chat")
 CHAT_METADATA_DELIMITER = "\n\n__PAPERLESS_CHAT_METADATA__"
 CHAT_ERROR_MESSAGE = "Sorry, something went wrong while generating a response."
 CHAT_NO_CONTENT_MESSAGE = "Sorry, I couldn't find any content to answer your question."
-MAX_CHAT_REFERENCES = 3
 CHAT_RETRIEVER_TOP_K = 5
+MAX_CHAT_REFERENCES = CHAT_RETRIEVER_TOP_K
 
 
 def _build_chat_prompt(output_language: str | None) -> str:
@@ -44,6 +44,16 @@ def _build_document_reference(
         "id": document.pk,
         "title": title or document.title or document.filename,
     }
+
+
+def _permitted_documents_filter(store, permitted_ids: set[int]):
+    """Scope retrieval to ``permitted_ids`` using whichever of an inclusion or
+    exclusion list is shorter, since a long inclusion list is much slower for
+    the vector store than a long exclusion list."""
+    denied_ids = store.indexed_document_ids() - permitted_ids
+    if len(permitted_ids) <= len(denied_ids):
+        return document_id_filters(str(pk) for pk in permitted_ids)
+    return exclude_document_ids_filter(str(pk) for pk in denied_ids)
 
 
 def _get_document_references(
@@ -124,28 +134,27 @@ def _stream_chat_with_documents(
         return
 
     from llama_index.core.prompts import PromptTemplate
-    from llama_index.core.query_engine import RetrieverQueryEngine
     from llama_index.core.response_synthesizers import get_response_synthesizer
     from llama_index.core.retrievers import VectorIndexRetriever
 
     config = AIConfig()
+    permitted_ids: set[int] | None = None
     if unrestricted:
-        # Exclude trashed ids (usually few) instead of an IN filter over the
-        # full permitted set, which risks the vector store's bound parameter
-        # limit (_MAX_IN_VALUES) on large installs. Trashed documents stay
-        # indexed until permanent deletion (delete_document_from_llm_index
-        # hangs off post_delete, not trash), so must be excluded explicitly.
+        # Exclude trashed ids (usually few) rather than send every permitted
+        # id on each query. Trashed documents stay indexed until permanent
+        # deletion (post_delete, not trash), so must be excluded explicitly.
         trashed_ids = Document.deleted_objects.values_list("pk", flat=True)
         filters = exclude_document_ids_filter(str(pk) for pk in trashed_ids)
     else:
-        filters = document_id_filters(
-            str(pk) for pk in documents.values_list("pk", flat=True)
-        )
+        permitted_ids = set(documents.values_list("pk", flat=True))
 
-    # Hold the shared read lock for the whole operation: the query engine
-    # retrieves from the vector store again during synthesis, so the connection
-    # must stay open (and the swap must not run) until the stream finishes.
+    # Hold the shared read lock only while reading the index, so the compaction
+    # swap cannot replace the database file while this connection is open.
+    # Everything after retrieval works on the nodes already in memory, so a slow
+    # LLM stream never holds the lock.
     with read_store() as store:
+        if permitted_ids is not None:
+            filters = _permitted_documents_filter(store, permitted_ids)
         index = load_or_build_index(config, store)
         retriever = VectorIndexRetriever(
             index=index,
@@ -158,43 +167,47 @@ def _stream_chat_with_documents(
         # #12976.
         with db_connection_released():
             top_nodes = retriever.retrieve(query_str)
-        if not top_nodes:
-            logger.warning("No nodes found for the given documents.")
-            yield CHAT_NO_CONTENT_MESSAGE
-            return
 
-        client = AIClient()
+    if permitted_ids is not None:
+        # An exclusion filter fails open for a document indexed after the
+        # permitted set was read, so drop anything not explicitly permitted.
+        top_nodes = [
+            node
+            for node in top_nodes
+            if int(node.metadata["document_id"]) in permitted_ids
+        ]
 
-        references = _get_document_references(documents, top_nodes)
+    if not top_nodes:
+        logger.warning("No nodes found for the given documents.")
+        yield CHAT_NO_CONTENT_MESSAGE
+        return
 
-        prompt_template = PromptTemplate(template=_build_chat_prompt(output_language))
-        refine_template = PromptTemplate(template=_build_refine_prompt(output_language))
-        response_synthesizer = get_response_synthesizer(
-            llm=client.llm,
-            prompt_helper=get_rag_prompt_helper(
-                chunk_size=config.llm_embedding_chunk_size,
-                context_size=config.llm_context_size,
-            ),
-            text_qa_template=prompt_template,
-            refine_template=refine_template,
-            streaming=True,
-        )
-        query_engine = RetrieverQueryEngine.from_args(
-            retriever=retriever,
-            llm=client.llm,
-            response_synthesizer=response_synthesizer,
-            streaming=True,
-        )
+    client = AIClient()
 
-        logger.debug("Document chat query: %s", query_str)
-        # Release the pooled DB connection for the slow streaming LLM response
-        # so it is not pinned for the whole stream; see paperless_ai.db and
-        # #12976.
-        with db_connection_released():
-            response_stream = query_engine.query(query_str)
-            for chunk in response_stream.response_gen:
-                yield chunk
-                sys.stdout.flush()
+    references = _get_document_references(documents, top_nodes)
 
-            if references:
-                yield _format_chat_metadata_trailer(references)
+    prompt_template = PromptTemplate(template=_build_chat_prompt(output_language))
+    refine_template = PromptTemplate(template=_build_refine_prompt(output_language))
+    response_synthesizer = get_response_synthesizer(
+        llm=client.llm,
+        prompt_helper=get_rag_prompt_helper(
+            chunk_size=config.llm_embedding_chunk_size,
+            context_size=config.llm_context_size,
+        ),
+        text_qa_template=prompt_template,
+        refine_template=refine_template,
+        streaming=True,
+    )
+
+    logger.debug("Document chat query: %s", query_str)
+    # Release the pooled DB connection for the slow streaming LLM response
+    # so it is not pinned for the whole stream; see paperless_ai.db and
+    # #12976.
+    with db_connection_released():
+        response_stream = response_synthesizer.synthesize(query_str, top_nodes)
+        for chunk in response_stream.response_gen:
+            yield chunk
+            sys.stdout.flush()
+
+        if references:
+            yield _format_chat_metadata_trailer(references)

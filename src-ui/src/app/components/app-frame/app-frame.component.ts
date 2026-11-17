@@ -8,12 +8,14 @@ import {
 import { NgClass } from '@angular/common'
 import {
   Component,
+  DestroyRef,
   HostListener,
   inject,
   OnInit,
   signal,
   viewChild,
 } from '@angular/core'
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
 import { FormsModule } from '@angular/forms'
 import { ActivatedRoute, Router, RouterModule } from '@angular/router'
 import {
@@ -24,10 +26,11 @@ import {
   NgbPopoverModule,
 } from '@ng-bootstrap/ng-bootstrap'
 import { TourNgBootstrap } from 'ngx-ui-tour-ng-bootstrap'
-import { Observable } from 'rxjs'
+import { filter, Observable } from 'rxjs'
 import { first } from 'rxjs/operators'
 import { BootstrapIconComponent } from 'src/app/components/common/bootstrap-icon/bootstrap-icon.component'
 import { Document } from 'src/app/data/document'
+import { PaperlessTaskStatus } from 'src/app/data/paperless-task'
 import { SavedView } from 'src/app/data/saved-view'
 import {
   CollapsibleSection,
@@ -41,6 +44,7 @@ import {
   DjangoMessageLevel,
   DjangoMessagesService,
 } from 'src/app/services/django-messages.service'
+import { DocumentListViewService } from 'src/app/services/document-list-view.service'
 import { OpenDocumentsService } from 'src/app/services/open-documents.service'
 import {
   PermissionAction,
@@ -53,6 +57,7 @@ import {
 } from 'src/app/services/rest/remote-version.service'
 import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { TaskNotificationService } from 'src/app/services/task-notification.service'
 import { TasksService } from 'src/app/services/tasks.service'
 import { ToastService } from 'src/app/services/toast.service'
 import { UploadDocumentsService } from 'src/app/services/upload-documents.service'
@@ -101,6 +106,8 @@ export class AppFrameComponent
   extends ComponentWithPermissions
   implements OnInit, ComponentCanDeactivate
 {
+  private destroyRef = inject(DestroyRef)
+  private documentList = inject(DocumentListViewService)
   router = inject(Router)
   private activatedRoute = inject(ActivatedRoute)
   private openDocumentsService = inject(OpenDocumentsService)
@@ -109,6 +116,7 @@ export class AppFrameComponent
   settingsService = inject(SettingsService)
   tasksService = inject(TasksService)
   private readonly toastService = inject(ToastService)
+  private readonly taskNotifications = inject(TaskNotificationService)
   private modalService = inject(NgbModal)
   permissionsService = inject(PermissionsService)
   private djangoMessagesService = inject(DjangoMessagesService)
@@ -164,6 +172,37 @@ export class AppFrameComponent
   }
 
   ngOnInit(): void {
+    this.websocketStatusService
+      .onBulkOperationStatus()
+      .pipe(
+        filter(({ status }) =>
+          [
+            PaperlessTaskStatus.Success,
+            PaperlessTaskStatus.Failure,
+            PaperlessTaskStatus.Revoked,
+          ].includes(status)
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe((result) => {
+        this.documentList.reload(null, false)
+        this.documentList.reduceSelectionToFilter()
+        // maybe someday we can optimize to only refresh affected documents
+        this.openDocumentsService.getOpenDocuments().forEach((doc) => {
+          this.openDocumentsService.refreshDocument(doc.id)
+        })
+        this.savedViewService.maybeRefreshDocumentCounts()
+        if (
+          this.permissionsService.currentUserCan(
+            PermissionAction.View,
+            PermissionType.PaperlessTask
+          )
+        ) {
+          this.tasksService.reload()
+        }
+        this.taskNotifications.complete(result)
+      })
+
     this.lastScrollY = window.scrollY
     this.detectClassicScrollbars()
 

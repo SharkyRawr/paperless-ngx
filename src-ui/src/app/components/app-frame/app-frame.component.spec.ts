@@ -11,8 +11,10 @@ import { ActivatedRoute, Router } from '@angular/router'
 import { RouterTestingModule } from '@angular/router/testing'
 import { NgbModal, NgbModalModule, NgbModule } from '@ng-bootstrap/ng-bootstrap'
 import { provideUiTour } from 'ngx-ui-tour-ng-bootstrap'
-import { of, throwError } from 'rxjs'
+import { of, Subject, throwError } from 'rxjs'
 import { routes } from 'src/app/app-routing.module'
+import { BulkOperationStatus } from 'src/app/data/bulk-operation'
+import { PaperlessTaskStatus } from 'src/app/data/paperless-task'
 import { SavedView } from 'src/app/data/saved-view'
 import { HideableSidebarItemID, SETTINGS_KEYS } from 'src/app/data/ui-settings'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
@@ -21,15 +23,17 @@ import {
   DjangoMessageLevel,
   DjangoMessagesService,
 } from 'src/app/services/django-messages.service'
+import { DocumentListViewService } from 'src/app/services/document-list-view.service'
 import { OpenDocumentsService } from 'src/app/services/open-documents.service'
 import {
-  PermissionType,
   PermissionsService,
+  PermissionType,
 } from 'src/app/services/permissions.service'
 import { RemoteVersionService } from 'src/app/services/rest/remote-version.service'
 import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { SearchService } from 'src/app/services/rest/search.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { TaskNotificationService } from 'src/app/services/task-notification.service'
 import { TasksService } from 'src/app/services/tasks.service'
 import { ToastService } from 'src/app/services/toast.service'
 import { UploadDocumentsService } from 'src/app/services/upload-documents.service'
@@ -95,6 +99,7 @@ describe('AppFrameComponent', () => {
   let savedViewSpy
   let modalService: NgbModal
   let maybeRefreshSpy
+  let bulkEvents: Subject<BulkOperationStatus>
   let tasksService: TasksService
 
   beforeEach(async () => {
@@ -182,12 +187,118 @@ describe('AppFrameComponent', () => {
     savedViewSpy = jest.spyOn(savedViewService, 'reload')
     maybeRefreshSpy = jest.spyOn(savedViewService, 'maybeRefreshDocumentCounts')
 
+    bulkEvents = new Subject<BulkOperationStatus>()
+    jest
+      .spyOn(TestBed.inject(WebsocketStatusService), 'onBulkOperationStatus')
+      .mockReturnValue(bulkEvents.asObservable())
     fixture = TestBed.createComponent(AppFrameComponent)
     component = fixture.componentInstance
 
     httpTestingController = TestBed.inject(HttpTestingController)
 
     fixture.detectChanges()
+  })
+
+  it('refreshes and updates the task notification on completion', () => {
+    const list = TestBed.inject(DocumentListViewService)
+    const reload = jest.spyOn(list, 'reload').mockImplementation(() => {})
+    jest.spyOn(list, 'reduceSelectionToFilter').mockImplementation(() => {})
+    const tasksReload = jest
+      .spyOn(tasksService, 'reload')
+      .mockImplementation(() => {})
+    const success = jest.spyOn(toastService, 'show')
+    const refresh = jest
+      .spyOn(openDocumentsService, 'refreshDocument')
+      .mockImplementation(() => {})
+    jest
+      .spyOn(openDocumentsService, 'getOpenDocuments')
+      .mockReturnValue([document])
+    tasksReload.mockClear()
+    maybeRefreshSpy.mockClear()
+    bulkEvents.next({
+      task_id: 'bulk-task',
+      operation: 'set_permissions',
+      status: PaperlessTaskStatus.Started,
+    })
+    expect(reload).not.toHaveBeenCalled()
+    bulkEvents.next({
+      task_id: 'bulk-task',
+      operation: 'set_permissions',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(reload).toHaveBeenCalledWith(null, false)
+    expect(refresh).toHaveBeenCalledWith(document.id)
+    expect(maybeRefreshSpy).toHaveBeenCalledTimes(1)
+    expect(tasksReload).toHaveBeenCalledTimes(1)
+    expect(success).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'task-bulk-task',
+        content: "Operation 'Set permissions' completed.",
+      })
+    )
+    fixture.destroy()
+    bulkEvents.next({
+      task_id: 'bulk-task',
+      operation: 'set_permissions',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes and reports failed or revoked bulk operations', () => {
+    const list = TestBed.inject(DocumentListViewService)
+    const reload = jest.spyOn(list, 'reload').mockImplementation(() => {})
+    jest.spyOn(list, 'reduceSelectionToFilter').mockImplementation(() => {})
+    jest.spyOn(tasksService, 'reload').mockImplementation(() => {})
+    const error = jest.spyOn(toastService, 'show')
+    const success = jest.spyOn(toastService, 'showSuccess')
+    for (const status of [
+      PaperlessTaskStatus.Failure,
+      PaperlessTaskStatus.Revoked,
+    ]) {
+      bulkEvents.next({
+        task_id: `${status}-task`,
+        operation: 'set_permissions',
+        status,
+        error:
+          status === PaperlessTaskStatus.Revoked
+            ? 'Task expired before execution.'
+            : 'Could not update',
+      })
+    }
+    expect(reload).toHaveBeenCalledTimes(2)
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Operation 'Set permissions' failed. Some changes may already have been applied.",
+        error: 'Could not update',
+      })
+    )
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Operation 'Set permissions' revoked.",
+        error: 'Task expired before execution.',
+      })
+    )
+    expect(success).not.toHaveBeenCalled()
+  })
+
+  it('passes delete completion to the shared task notification handler', () => {
+    const success = jest.spyOn(toastService, 'showSuccess')
+    const notifications = TestBed.inject(TaskNotificationService)
+    const handleStatus = jest.spyOn(notifications, 'complete')
+    bulkEvents.next({
+      task_id: 'delete-1',
+      operation: 'delete',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(handleStatus).toHaveBeenCalledWith({
+      task_id: 'delete-1',
+      operation: 'delete',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(success).not.toHaveBeenCalled()
   })
 
   it('should initialize the saved view service', () => {

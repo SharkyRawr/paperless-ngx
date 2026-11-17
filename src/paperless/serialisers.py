@@ -19,18 +19,20 @@ from PIL import Image
 from rest_framework import serializers
 from rest_framework.authtoken.serializers import AuthTokenSerializer
 
+from paperless.config import OCR_RESERVED_USER_ARGS
+from paperless.fields import ObfuscatedPasswordField
+from paperless.fields import is_obfuscated_password
 from paperless.models import ApplicationConfiguration
 from paperless.network import validate_outbound_http_url
 from paperless.validators import reject_dangerous_svg
 from paperless.validators import validate_raster_image
-from paperless_mail.serialisers import ObfuscatedPasswordField
 
 logger = logging.getLogger("paperless.settings")
 
 
 class PasswordValidationMixin:
     def _has_real_password(self, value: str | None) -> bool:
-        return bool(value) and value.replace("*", "") != ""
+        return bool(value) and not is_obfuscated_password(value)
 
     def validate_password(self, value: str) -> str:
         if not self._has_real_password(value):
@@ -251,6 +253,13 @@ class ApplicationConfigurationSerializer(
 
     def validate_user_args(self, value):
         self._require_json_object("user_args", value)
+        if value is not None:
+            reserved = sorted(OCR_RESERVED_USER_ARGS & value.keys())
+            if reserved:
+                raise serializers.ValidationError(
+                    f"user_args may not set arguments managed by paperless: "
+                    f"{', '.join(reserved)}.",
+                )
         return value
 
     def validate_barcode_tag_mapping(self, value):
@@ -277,7 +286,7 @@ class ApplicationConfigurationSerializer(
                 if data[field] == "":
                     data[field] = None
                 # Not a real value, don't overwrite the stored one
-                elif len(data[field].replace("*", "")) == 0:
+                elif is_obfuscated_password(data[field]):
                     del data[field]
         return super().run_validation(data)
 

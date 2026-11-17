@@ -68,6 +68,8 @@ import { StoragePath } from 'src/app/data/storage-path'
 import { Tag } from 'src/app/data/tag'
 import { SETTINGS_KEYS, SuggestionSource } from 'src/app/data/ui-settings'
 import { User } from 'src/app/data/user'
+import { Workflow } from 'src/app/data/workflow'
+import { WorkflowTriggerType } from 'src/app/data/workflow-trigger'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
 import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
@@ -93,7 +95,9 @@ import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { StoragePathService } from 'src/app/services/rest/storage-path.service'
 import { TagService } from 'src/app/services/rest/tag.service'
 import { UserService } from 'src/app/services/rest/user.service'
+import { WorkflowService } from 'src/app/services/rest/workflow.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { TaskNotificationService } from 'src/app/services/task-notification.service'
 import { ToastService } from 'src/app/services/toast.service'
 import { TrashService } from 'src/app/services/trash.service'
 import { WebsocketStatusService } from 'src/app/services/websocket-status.service'
@@ -104,6 +108,7 @@ import { DocumentDetailFieldID } from '../admin/settings/settings.component'
 import { ConfirmDialogComponent } from '../common/confirm-dialog/confirm-dialog.component'
 import { PasswordRemovalConfirmDialogComponent } from '../common/confirm-dialog/password-removal-confirm-dialog/password-removal-confirm-dialog.component'
 import { ReprocessConfirmDialogComponent } from '../common/confirm-dialog/reprocess-confirm-dialog/reprocess-confirm-dialog.component'
+import { RunWorkflowConfirmDialogComponent } from '../common/confirm-dialog/run-workflow-confirm-dialog/run-workflow-confirm-dialog.component'
 import { CustomFieldsDropdownComponent } from '../common/custom-fields-dropdown/custom-fields-dropdown.component'
 import { CorrespondentEditDialogComponent } from '../common/edit-dialog/correspondent-edit-dialog/correspondent-edit-dialog.component'
 import { DocumentTypeEditDialogComponent } from '../common/edit-dialog/document-type-edit-dialog/document-type-edit-dialog.component'
@@ -222,6 +227,7 @@ export class DocumentDetailComponent
   private documentListViewService = inject(DocumentListViewService)
   private documentTitlePipe = inject(DocumentTitlePipe)
   private toastService = inject(ToastService)
+  private taskNotifications = inject(TaskNotificationService)
   private trashService = inject(TrashService)
   private settings = inject(SettingsService)
   private storagePathService = inject(StoragePathService)
@@ -233,6 +239,7 @@ export class DocumentDetailComponent
   private componentRouterService = inject(ComponentRouterService)
   private deviceDetectorService = inject(DeviceDetectorService)
   private savedViewService = inject(SavedViewService)
+  private readonly workflowService = inject(WorkflowService)
   private readonly websocketStatusService = inject(WebsocketStatusService)
   private readonly useNativePdfViewerSetting = this.settings.getSignal<boolean>(
     SETTINGS_KEYS.USE_NATIVE_PDF_VIEWER
@@ -295,6 +302,7 @@ export class DocumentDetailComponent
   readonly correspondents = signal<Correspondent[]>(undefined)
   readonly documentTypes = signal<DocumentType[]>(undefined)
   readonly storagePaths = signal<StoragePath[]>(undefined)
+  readonly manualWorkflows = signal<Workflow[]>([])
 
   documentForm: FormGroup = new FormGroup({
     title: new FormControl(''),
@@ -835,6 +843,20 @@ export class DocumentDetailComponent
         .listAll()
         .pipe(first(), takeUntil(this.unsubscribeNotifier))
         .subscribe((result) => this.users.set(result.results))
+    }
+    if (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.Workflow
+      )
+    ) {
+      this.workflowService
+        .list(1, 100000, null, null, {
+          trigger_type: WorkflowTriggerType.Manual,
+          enabled: true,
+        })
+        .pipe(first(), takeUntil(this.unsubscribeNotifier))
+        .subscribe((result) => this.manualWorkflows.set(result.results))
     }
 
     this.getCustomFields()
@@ -1454,7 +1476,12 @@ export class DocumentDetailComponent
       .subscribe((closed) => {
         if (!closed) return
         if (closedCallback) closedCallback()
-        if (this.documentListViewService.activeSavedViewId) {
+        if (
+          this.componentRouterService.getComponentURLBefore() === 'dashboard'
+        ) {
+          // e.g. opened from a dashboard widget
+          this.router.navigate(['dashboard'])
+        } else if (this.documentListViewService.activeSavedViewId) {
           this.router.navigate([
             'view',
             this.documentListViewService.activeSavedViewId,
@@ -1533,9 +1560,11 @@ export class DocumentDetailComponent
           modal.componentInstance.remoteOcr
         )
         .subscribe({
-          next: () => {
-            this.toastService.showInfo(
-              $localize`Reprocess operation for "${this.document().title}" will begin in the background.`
+          next: ({ task_id }) => {
+            this.taskNotifications.showQueued(
+              task_id,
+              $localize`Document reprocessing queued.`,
+              { content: $localize`Document submitted for reprocessing.` }
             )
             if (modal) {
               modal.close()
@@ -1545,6 +1574,45 @@ export class DocumentDetailComponent
             if (modal) {
               modal.componentInstance.buttonsEnabled.set(true)
             }
+            this.toastService.showError(
+              $localize`Error executing operation`,
+              error
+            )
+          },
+        })
+    })
+  }
+
+  runWorkflow() {
+    const modal = this.modalService.open(RunWorkflowConfirmDialogComponent, {
+      backdrop: 'static',
+    })
+    modal.componentInstance.title = $localize`Run workflow`
+    modal.componentInstance.message = $localize`Run a workflow on "${this.document().title}".`
+    modal.componentInstance.btnCaption = $localize`Run`
+    modal.componentInstance.workflows = this.manualWorkflows()
+    modal.componentInstance.singleDocument = true
+    modal.componentInstance.force = true
+    modal.componentInstance.confirmClicked.subscribe(() => {
+      modal.componentInstance.buttonsEnabled.set(false)
+      this.documentsService
+        .bulkEdit({ documents: [this.document().id] }, 'run_workflow', {
+          workflow: modal.componentInstance.workflowId,
+          filter_documents: !modal.componentInstance.force,
+        })
+        .subscribe({
+          next: ({ task_id }) => {
+            this.taskNotifications.showQueued(
+              task_id,
+              $localize`Workflow queued.`,
+              {
+                content: $localize`Workflow completed.`,
+              }
+            )
+            modal.close()
+          },
+          error: (error) => {
+            modal.componentInstance.buttonsEnabled.set(true)
             this.toastService.showError(
               $localize`Error executing operation`,
               error
@@ -1929,14 +1997,15 @@ export class DocumentDetailComponent
           })
           .pipe(first(), takeUntil(this.unsubscribeNotifier))
           .subscribe({
-            next: () => {
-              this.toastService.showInfo(
-                $localize`PDF edit operation for "${this.document().title}" will begin in the background.`
+            next: ({ task_id }) => {
+              this.taskNotifications.showQueued(
+                task_id,
+                $localize`PDF edit queued.`,
+                {
+                  content: $localize`PDF edit submitted for processing.`,
+                }
               )
               modal.close()
-              if (modal.componentInstance.deleteOriginal) {
-                this.openDocumentService.closeDocument(this.document())
-              }
             },
             error: (error) => {
               if (modal) {
@@ -1986,17 +2055,16 @@ export class DocumentDetailComponent
           })
           .pipe(first(), takeUntil(this.unsubscribeNotifier))
           .subscribe({
-            next: () => {
-              this.toastService.showInfo(
-                $localize`Password removal operation for "${this.document().title}" will begin in the background.`
+            next: ({ task_id }) => {
+              this.taskNotifications.showQueued(
+                task_id,
+                $localize`Password removal queued.`,
+                {
+                  content: $localize`Password removal submitted for processing.`,
+                }
               )
               this.networkActive.set(false)
               modal.close()
-              if (!dialog.updateDocument && dialog.deleteOriginal) {
-                this.openDocumentService.closeDocument(this.document())
-              } else if (dialog.updateDocument) {
-                this.openDocumentService.refreshDocument(this.documentId())
-              }
             },
             error: (error) => {
               dialog.buttonsEnabled.set(true)

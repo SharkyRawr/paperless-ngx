@@ -14,9 +14,11 @@ import { Correspondent } from 'src/app/data/correspondent'
 import { CustomField, CustomFieldDataType } from 'src/app/data/custom-field'
 import { DocumentType } from 'src/app/data/document-type'
 import { FILTER_TITLE } from 'src/app/data/filter-rule-type'
-import { Results } from 'src/app/data/results'
+import { PaperlessTaskStatus } from 'src/app/data/paperless-task'
+import { Results, SelectionData } from 'src/app/data/results'
 import { StoragePath } from 'src/app/data/storage-path'
 import { Tag } from 'src/app/data/tag'
+import { WorkflowTriggerType } from 'src/app/data/workflow-trigger'
 import { FilterPipe } from 'src/app/pipes/filter.pipe'
 import { DocumentListViewService } from 'src/app/services/document-list-view.service'
 import {
@@ -27,16 +29,15 @@ import {
 import { CorrespondentService } from 'src/app/services/rest/correspondent.service'
 import { CustomFieldsService } from 'src/app/services/rest/custom-fields.service'
 import { DocumentTypeService } from 'src/app/services/rest/document-type.service'
-import {
-  DocumentService,
-  SelectionData,
-} from 'src/app/services/rest/document.service'
+import { DocumentService } from 'src/app/services/rest/document.service'
 import { GroupService } from 'src/app/services/rest/group.service'
 import { ShareLinkBundleService } from 'src/app/services/rest/share-link-bundle.service'
 import { StoragePathService } from 'src/app/services/rest/storage-path.service'
 import { TagService } from 'src/app/services/rest/tag.service'
 import { UserService } from 'src/app/services/rest/user.service'
+import { WorkflowService } from 'src/app/services/rest/workflow.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { TaskNotificationService } from 'src/app/services/task-notification.service'
 import { ToastService } from 'src/app/services/toast.service'
 import { TrashService } from 'src/app/services/trash.service'
 import { environment } from 'src/environments/environment'
@@ -83,6 +84,7 @@ describe('BulkEditorComponent', () => {
   let customFieldsService: CustomFieldsService
   let httpTestingController: HttpTestingController
   let shareLinkBundleService: ShareLinkBundleService
+  let workflowService: WorkflowService
   let router: Router
 
   beforeEach(async () => {
@@ -174,6 +176,22 @@ describe('BulkEditorComponent', () => {
           },
         },
         {
+          provide: WorkflowService,
+          useValue: {
+            list: jest.fn(() =>
+              of({
+                results: [
+                  {
+                    id: 5,
+                    name: 'Manual workflow',
+                    triggers: [{ type: WorkflowTriggerType.Manual }],
+                  },
+                ],
+              })
+            ),
+          },
+        },
+        {
           provide: Router,
           useValue: { navigate: jest.fn().mockResolvedValue(true) },
         },
@@ -195,6 +213,7 @@ describe('BulkEditorComponent', () => {
     customFieldsService = TestBed.inject(CustomFieldsService)
     httpTestingController = TestBed.inject(HttpTestingController)
     shareLinkBundleService = TestBed.inject(ShareLinkBundleService)
+    workflowService = TestBed.inject(WorkflowService)
     router = TestBed.inject(Router)
 
     fixture = TestBed.createComponent(BulkEditorComponent)
@@ -559,18 +578,19 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'modify_tags',
       parameters: { add_tags: [101], remove_tags: [] },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should execute modify tags bulk operation for all filtered documents', () => {
@@ -607,17 +627,18 @@ describe('BulkEditorComponent', () => {
     const req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       all: true,
       filters: { title_search: 'apple' },
       excluded_documents: [4],
       method: 'modify_tags',
       parameters: { add_tags: [101], remove_tags: [] },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
+    )
   })
 
   it('should execute modify tags bulk operation with confirmation dialog if enabled', () => {
@@ -644,12 +665,87 @@ describe('BulkEditorComponent', () => {
     httpTestingController
       .expectOne(`${environment.apiBaseUrl}documents/bulk_edit/`)
       .flush(true)
+    httpTestingController.expectNone(
+      `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
+    )
+    httpTestingController.expectNone(
+      `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
+    )
+  })
+
+  it('should load manual workflows on init', () => {
+    jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
+    fixture.detectChanges()
+    expect(workflowService.list).toHaveBeenCalledWith(1, 100000, null, null, {
+      trigger_type: WorkflowTriggerType.Manual,
+      enabled: true,
+    })
+    expect(component.manualWorkflows).toHaveLength(1)
+    expect(component.manualWorkflows[0].id).toEqual(5)
+  })
+
+  it('should run a workflow on the selection via the run workflow dialog', () => {
+    const toast = jest.spyOn(toastService, 'show')
+    const infoToast = jest.spyOn(toastService, 'showInfo')
+    let modal: NgbModalRef
+    modalService.activeInstances.subscribe((m) => (modal = m[0]))
+    jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
+    jest
+      .spyOn(documentListViewService, 'documents', 'get')
+      .mockReturnValue([{ id: 3 }, { id: 4 }])
+    jest
+      .spyOn(documentListViewService, 'selected', 'get')
+      .mockReturnValue(new Set([3, 4]))
+    fixture.detectChanges()
+    component.runWorkflowSelected()
+    expect(modal).not.toBeUndefined()
+    expect(modal.componentInstance.workflows).toEqual(component.manualWorkflows)
+    expect(modal.componentInstance.singleDocument).toBe(false)
+    expect(modal.componentInstance.force).toBe(false)
+    modal.componentInstance.workflowId = 5
+    modal.componentInstance.force = true
+    modal.componentInstance.confirm()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}documents/bulk_edit/`
+    )
+    expect(req.request.body.method).toEqual('run_workflow')
+    expect(req.request.body.parameters).toEqual({
+      workflow: 5,
+      filter_documents: false,
+    })
+    req.flush({ result: 'OK' })
+    expect(infoToast).toHaveBeenCalledWith(
+      'Workflow will run on the selected documents in the background.'
+    )
+    expect(toast.mock.calls.at(-1)[0].actionName).toBeUndefined()
+    expect(documentListViewService.selected.size).toBe(0)
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
     ) // list reload
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
     ) // listAllFilteredIds
+  })
+
+  it('should require ownership of selected documents to run a workflow', () => {
+    component.manualWorkflows = [{ id: 5 }] as any
+    jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
+    jest
+      .spyOn(permissionsService, 'currentUserHasObjectPermissions')
+      .mockReturnValue(true)
+    const ownsDocument = jest
+      .spyOn(permissionsService, 'currentUserOwnsObject')
+      .mockReturnValue(false)
+    jest
+      .spyOn(documentListViewService, 'documents', 'get')
+      .mockReturnValue([{ id: 3 }])
+    jest
+      .spyOn(documentListViewService, 'selected', 'get')
+      .mockReturnValue(new Set([3]))
+
+    expect(component.canRunWorkflow).toBe(false)
+    ownsDocument.mockReturnValue(true)
+    expect(component.canRunWorkflow).toBe(true)
   })
 
   it('should set modal dialog text accordingly for tag edit confirmation', () => {
@@ -729,18 +825,19 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'set_correspondent',
       parameters: { correspondent: 101 },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should execute modify correspondent bulk operation with confirmation dialog if enabled', () => {
@@ -767,12 +864,12 @@ describe('BulkEditorComponent', () => {
     httpTestingController
       .expectOne(`${environment.apiBaseUrl}documents/bulk_edit/`)
       .flush(true)
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should set modal dialog text accordingly for correspondent edit confirmation', () => {
@@ -827,18 +924,19 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'set_document_type',
       parameters: { document_type: 101 },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should execute modify document type bulk operation with confirmation dialog if enabled', () => {
@@ -865,12 +963,12 @@ describe('BulkEditorComponent', () => {
     httpTestingController
       .expectOne(`${environment.apiBaseUrl}documents/bulk_edit/`)
       .flush(true)
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should set modal dialog text accordingly for document type edit confirmation', () => {
@@ -925,18 +1023,19 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'set_storage_path',
       parameters: { storage_path: 101 },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should execute modify storage path bulk operation with confirmation dialog if enabled', () => {
@@ -963,12 +1062,12 @@ describe('BulkEditorComponent', () => {
     httpTestingController
       .expectOne(`${environment.apiBaseUrl}documents/bulk_edit/`)
       .flush(true)
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should set modal dialog text accordingly for storage path edit confirmation', () => {
@@ -1023,18 +1122,19 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'modify_custom_fields',
       parameters: { add_custom_fields: [101], remove_custom_fields: [102] },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should execute modify custom fields bulk operation with confirmation dialog if enabled', () => {
@@ -1061,12 +1161,12 @@ describe('BulkEditorComponent', () => {
     httpTestingController
       .expectOne(`${environment.apiBaseUrl}documents/bulk_edit/`)
       .flush(true)
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
 
     // coverage for modal messages
     component.setCustomFields({
@@ -1166,14 +1266,15 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/delete/`
     )
-    const notifySpy = jest
-      .spyOn(trashService, 'notifyMovedToTrash')
+    const trackSpy = jest
+      .spyOn(trashService, 'trackMovedToTrash')
       .mockImplementation(() => {})
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'delete-1' })
     expect(req.request.body).toEqual({
       documents: [3, 4],
+      from_webui: true,
     })
-    expect(notifySpy).toHaveBeenCalledWith(expect.any(String), [3, 4])
+    expect(trackSpy).toHaveBeenCalledWith('delete-1', 2, [3, 4])
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
     ) // list reload
@@ -1190,9 +1291,9 @@ describe('BulkEditorComponent', () => {
     req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/delete/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'delete-2' })
     // ids aren't known when all matching documents are selected, so no undo
-    expect(notifySpy).toHaveBeenLastCalledWith(expect.any(String), null)
+    expect(trackSpy).toHaveBeenLastCalledWith('delete-2', 0, null)
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
     ) // list reload
@@ -1272,10 +1373,11 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/reprocess/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'reprocess-1' })
     expect(req.request.body).toEqual({
       documents: [3, 4],
       remote_ocr: false,
+      from_webui: true,
     })
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
@@ -1286,6 +1388,7 @@ describe('BulkEditorComponent', () => {
   })
 
   it('should support rotate', () => {
+    const toast = jest.spyOn(toastService, 'show')
     let modal: NgbModalRef
     modalService.activeInstances.subscribe((m) => (modal = m[0]))
     jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
@@ -1306,11 +1409,20 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/rotate/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'rotate-1' })
+    TestBed.inject(TaskNotificationService).complete({
+      task_id: 'rotate-1',
+      operation: 'rotate',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(toast.mock.calls.at(-1)[0].content).toBe(
+      "Bulk operation 'Rotate documents' submitted for processing."
+    )
     expect(req.request.body).toEqual({
       documents: [3, 4],
       degrees: 90,
       source_mode: 'latest_version',
+      from_webui: true,
     })
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
@@ -1348,10 +1460,11 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/merge/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'merge-1' })
     expect(req.request.body).toEqual({
       documents: [3, 4],
       metadata_document_id: 3,
+      from_webui: true,
     })
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
@@ -1366,11 +1479,12 @@ describe('BulkEditorComponent', () => {
     req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/merge/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'merge-2' })
     expect(req.request.body).toEqual({
       documents: [3, 4],
       metadata_document_id: 3,
       delete_originals: true,
+      from_webui: true,
     })
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
@@ -1387,11 +1501,12 @@ describe('BulkEditorComponent', () => {
     req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/merge/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'merge-3' })
     expect(req.request.body).toEqual({
       documents: [3, 4],
       metadata_document_id: 3,
       archive_fallback: true,
+      from_webui: true,
     })
     httpTestingController.match(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
@@ -1403,6 +1518,7 @@ describe('BulkEditorComponent', () => {
   })
 
   it('should support merging documents as versions', () => {
+    jest.useFakeTimers()
     let modal: NgbModalRef
     modalService.activeInstances.subscribe((m) => (modal = m[0]))
     jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
@@ -1430,8 +1546,8 @@ describe('BulkEditorComponent', () => {
       .mockReturnValue(true)
     const mergeAsVersionsSpy = jest
       .spyOn(documentService, 'mergeDocumentsAsVersions')
-      .mockReturnValue(of(true))
-    const toastSuccessSpy = jest.spyOn(toastService, 'showSuccess')
+      .mockReturnValue(of({ result: 'OK', task_id: 'versions-1' }))
+    const toastSpy = jest.spyOn(toastService, 'show')
     fixture.detectChanges()
 
     component.mergeSelectedAsVersions()
@@ -1447,9 +1563,21 @@ describe('BulkEditorComponent', () => {
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
     )
     expect(documentListViewService.selected.size).toEqual(0)
-    expect(toastSuccessSpy).toHaveBeenCalledWith(
-      'Documents merged as versions.'
+    jest.advanceTimersByTime(400)
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Bulk operation 'Merge as versions' queued.",
+      })
     )
+    TestBed.inject(TaskNotificationService).complete({
+      task_id: 'versions-1',
+      operation: 'merge_as_versions',
+      status: PaperlessTaskStatus.Success,
+    })
+    expect(toastSpy.mock.calls.at(-1)[0].content).toBe(
+      "Bulk operation 'Merge as versions' completed."
+    )
+    jest.useRealTimers()
   })
 
   it('should not report success when merging documents as versions fails', () => {
@@ -1540,6 +1668,69 @@ describe('BulkEditorComponent', () => {
     )
   })
 
+  it.each<[boolean, number]>([
+    [true, 2],
+    [false, 2],
+    [true, 1],
+  ])(
+    'names queued work and gates the task link (permission %s, documents %s)',
+    (canViewTasks, count) => {
+      jest.useFakeTimers()
+      jest
+        .spyOn(permissionsService, 'currentUserCan')
+        .mockReturnValue(canViewTasks)
+      jest
+        .spyOn(documentListViewService, 'selected', 'get')
+        .mockReturnValue(
+          new Set(Array.from({ length: count }, (_, index) => index + 3))
+        )
+      const queued = jest.spyOn(toastService, 'show')
+      let modal: NgbModalRef
+      modalService.activeInstances.subscribe((instances) => {
+        if (instances.length) modal = instances[0]
+      })
+      const reload = jest.spyOn(documentListViewService, 'reload')
+      component.setPermissions()
+      const close = jest.spyOn(modal, 'close')
+      modal.componentInstance.confirmClicked.emit({
+        permissions: {},
+        merge: true,
+      })
+      const req = httpTestingController.expectOne(
+        `${environment.apiBaseUrl}documents/bulk_edit/`
+      )
+      req.flush({ result: 'OK', task_id: 'queued-operation' })
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(queued).not.toHaveBeenCalled()
+      jest.advanceTimersByTime(400)
+      const notification = queued.mock.calls.at(-1)[0]
+      const prefix = count > 1 ? 'Bulk operation' : 'Operation'
+      expect(notification.content).toBe(`${prefix} \'Set permissions\' queued.`)
+      if (canViewTasks) {
+        expect(notification.actionName).toBe('View task')
+        notification.action()
+        expect(router.navigate).toHaveBeenCalledWith(['/tasks'], {
+          queryParams: { task_id: 'queued-operation' },
+        })
+      } else {
+        expect(notification.action).toBeUndefined()
+        expect(notification.actionName).toBeUndefined()
+      }
+      expect(reload).not.toHaveBeenCalled()
+      expect(documentListViewService.selected.size).toBe(0)
+      expect(documentListViewService.allSelected).toBe(false)
+      TestBed.inject(TaskNotificationService).complete({
+        task_id: 'queued-operation',
+        operation: 'set_permissions',
+        status: PaperlessTaskStatus.Success,
+      })
+      const completed = queued.mock.calls.at(-1)[0]
+      expect(completed.content).toBe(`${prefix} \'Set permissions\' completed.`)
+      expect(completed.action).toBeUndefined()
+      jest.useRealTimers()
+    }
+  )
+
   it('should support bulk permissions update', () => {
     let modal: NgbModalRef
     modalService.activeInstances.subscribe((m) => (modal = m[0]))
@@ -1572,8 +1763,9 @@ describe('BulkEditorComponent', () => {
     let req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}documents/bulk_edit/`
     )
-    req.flush(true)
+    req.flush({ result: 'OK', task_id: 'queued-task' })
     expect(req.request.body).toEqual({
+      from_webui: true,
       documents: [3, 4],
       method: 'set_permissions',
       parameters: {
@@ -1581,12 +1773,12 @@ describe('BulkEditorComponent', () => {
         merge: true,
       },
     })
-    httpTestingController.match(
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should not attempt to retrieve objects if user does not have permissions', () => {
@@ -1616,7 +1808,6 @@ describe('BulkEditorComponent', () => {
         { id: 2, name: 'Tag 2' },
       ],
       count: 2,
-      all: [1, 2],
     }
 
     const modalInstance = {
@@ -1659,7 +1850,6 @@ describe('BulkEditorComponent', () => {
         { id: 2, name: 'Correspondent 2' },
       ],
       count: 2,
-      all: [1, 2],
     }
 
     const modalInstance = {
@@ -1708,7 +1898,6 @@ describe('BulkEditorComponent', () => {
         { id: 2, name: 'Document Type 2' },
       ],
       count: 2,
-      all: [1, 2],
     }
 
     const modalInstance = {
@@ -1754,7 +1943,6 @@ describe('BulkEditorComponent', () => {
         { id: 2, name: 'Storage Path 2' },
       ],
       count: 2,
-      all: [1, 2],
     }
 
     const modalInstance = {
@@ -1808,7 +1996,6 @@ describe('BulkEditorComponent', () => {
         },
       ],
       count: 2,
-      all: [1, 2],
     }
 
     const modalInstance = {
@@ -1887,15 +2074,18 @@ describe('BulkEditorComponent', () => {
     expect(toastServiceShowErrorSpy).toHaveBeenCalled()
     expect(listReloadSpy).not.toHaveBeenCalled()
 
-    modal.componentInstance.succeeded.emit()
-    expect(toastServiceShowInfoSpy).toHaveBeenCalled()
-    expect(listReloadSpy).toHaveBeenCalled()
-    httpTestingController.match(
+    modal.componentInstance.succeeded.emit({
+      result: 'OK',
+      task_id: 'custom-fields-task',
+    })
+    expect(toastServiceShowInfoSpy).not.toHaveBeenCalled()
+    expect(listReloadSpy).not.toHaveBeenCalled()
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=50&ordering=-created&truncate_content=true&include_selection_data=true`
-    ) // list reload
-    httpTestingController.match(
+    )
+    httpTestingController.expectNone(
       `${environment.apiBaseUrl}documents/?page=1&page_size=100000&fields=id`
-    ) // listAllFilteredIds
+    )
   })
 
   it('should create share link bundle and enable manage callback', () => {

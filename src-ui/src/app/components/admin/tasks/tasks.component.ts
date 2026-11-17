@@ -1,7 +1,7 @@
 import { JsonPipe, NgTemplateOutlet } from '@angular/common'
 import { Component, inject, OnDestroy, OnInit, signal } from '@angular/core'
 import { FormsModule, ReactiveFormsModule } from '@angular/forms'
-import { Router, RouterLink } from '@angular/router'
+import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import {
   NgbCollapseModule,
   NgbDropdownModule,
@@ -33,6 +33,10 @@ import { IfPermissionsDirective } from 'src/app/directives/if-permissions.direct
 import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
 import { TasksService } from 'src/app/services/tasks.service'
 import { ToastService } from 'src/app/services/toast.service'
+import {
+  documentOperationHasFollowUpTasks,
+  getDocumentOperationLabel,
+} from 'src/app/utils/document-operation'
 import { ConfirmDialogComponent } from '../../common/confirm-dialog/confirm-dialog.component'
 import { PageHeaderComponent } from '../../common/page-header/page-header.component'
 import { LoadingComponentWithPermissions } from '../../loading-component/loading.component'
@@ -47,11 +51,13 @@ export enum TaskSection {
 export enum TaskFilterTargetID {
   Name,
   Result,
+  TaskId,
 }
 
 const FILTER_TARGETS = [
   { id: TaskFilterTargetID.Name, name: $localize`Name` },
   { id: TaskFilterTargetID.Result, name: $localize`Result` },
+  { id: TaskFilterTargetID.TaskId, name: $localize`Task ID` },
 ]
 
 const SECTION_LABELS = {
@@ -161,6 +167,7 @@ export class TasksComponent
   tasksService = inject(TasksService)
   private modalService = inject(NgbModal)
   private readonly router = inject(Router)
+  private readonly route = inject(ActivatedRoute)
   private readonly toastService = inject(ToastService)
 
   readonly TaskSection = TaskSection
@@ -275,6 +282,17 @@ export class TasksComponent
   }
 
   ngOnInit() {
+    const taskId = this.route.snapshot.queryParamMap.get('task_id')
+    if (taskId) {
+      this.filterTargetID = TaskFilterTargetID.TaskId
+      this._filterText = taskId
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { task_id: null },
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      })
+    }
     this.tasksService.reload()
     this.reloadPage()
     timer(5000, 5000)
@@ -400,11 +418,30 @@ export class TasksComponent
   }
 
   taskDisplayName(task: PaperlessTask): string {
-    return task.input_data?.filename?.toString() || task.task_type_display
+    const filename = task.input_data?.filename?.toString()
+    if (filename) return filename
+    const operation = this.taskOperationLabel(task)
+    const count = this.taskDocumentCount(task)
+    if (operation && count !== null && count > 1) {
+      return $localize`Bulk operation: ${operation}`
+    }
+    return operation || task.task_type_display
   }
 
   taskShowsSeparateTypeLabel(task: PaperlessTask): boolean {
-    return this.taskDisplayName(task) !== task.task_type_display
+    return (
+      !this.taskOperationLabel(task) &&
+      this.taskDisplayName(task) !== task.task_type_display
+    )
+  }
+
+  private taskOperationLabel(task: PaperlessTask): string | null {
+    return getDocumentOperationLabel(task.input_data?.operation)
+  }
+
+  taskDocumentCount(task: PaperlessTask): number | null {
+    const count = task.input_data?.document_count
+    return Number.isInteger(count) && count >= 0 ? count : null
   }
 
   taskResultMessage(task: PaperlessTask): string | null {
@@ -430,6 +467,15 @@ export class TasksComponent
     const errorMessage = task.result_data?.['error_message']
     if (typeof errorMessage === 'string') {
       return errorMessage
+    }
+
+    if (
+      task.status === PaperlessTaskStatus.Success &&
+      this.taskOperationLabel(task)
+    ) {
+      return documentOperationHasFollowUpTasks(task.input_data?.operation)
+        ? $localize`Submitted for processing`
+        : $localize`Completed`
     }
 
     return null
@@ -636,17 +682,12 @@ export class TasksComponent
 
     const query = this._filterText.toLowerCase()
 
-    if (this.filterTargetID == TaskFilterTargetID.Name) {
-      return [
-        this.taskDisplayName(task),
-        task.task_type_display,
-        task.trigger_source_display,
-      ]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(query))
+    if (this.filterTargetID === TaskFilterTargetID.TaskId) {
+      return task.task_id.toLowerCase() === query
     }
 
-    return this.taskResultMessage(task)?.toLowerCase().includes(query) ?? false
+    // Text filtering now handled API-side
+    return true
   }
 
   private tasksForOptionCounts({
@@ -706,9 +747,15 @@ export class TasksComponent
     }
 
     if (this._filterText.length) {
-      params[
-        this.filterTargetID === TaskFilterTargetID.Name ? 'name' : 'result'
-      ] = this._filterText
+      const parameter = {
+        [TaskFilterTargetID.Name]: 'name',
+        [TaskFilterTargetID.Result]: 'result',
+        [TaskFilterTargetID.TaskId]: 'task_id',
+      }[this.filterTargetID]
+      params[parameter] = this._filterText
+      if (this.filterTargetID === TaskFilterTargetID.TaskId) {
+        delete params.acknowledged
+      }
     }
 
     return params

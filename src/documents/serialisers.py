@@ -589,7 +589,7 @@ class TagSerializer(MatchingModelSerializer, OwnedObjectSerializer):
 
     text_color = serializers.SerializerMethodField()
 
-    # map to treenode's tn_parent
+    # Preserve the public API parent field.
     parent = serializers.PrimaryKeyRelatedField(
         queryset=Tag.objects.all(),
         allow_null=True,
@@ -692,7 +692,9 @@ class TagSerializer(MatchingModelSerializer, OwnedObjectSerializer):
                 self.instance.clean()
             except ValidationError as e:
                 logger.debug("Tag parent validation failed: %s", e)
-                raise e
+                raise serializers.ValidationError(
+                    {"parent": e.message_dict["tn_parent"]},
+                ) from e
             finally:
                 self.instance.tn_parent = original_parent
         else:
@@ -702,7 +704,9 @@ class TagSerializer(MatchingModelSerializer, OwnedObjectSerializer):
                 temp.clean()
             except ValidationError as e:
                 logger.debug("Tag parent validation failed: %s", e)
-                raise e
+                raise serializers.ValidationError(
+                    {"parent": e.message_dict["tn_parent"]},
+                ) from e
 
         return super().validate(attrs)
 
@@ -967,8 +971,17 @@ class NotesSerializer(serializers.ModelSerializer[Note]):
 
     class Meta:
         model = Note
-        fields = ["id", "note", "created", "user"]
+        fields = ["id", "note", "format", "created", "user"]
         ordering = ["-created"]
+
+
+class NoteCreateSerializer(serializers.Serializer[dict[str, Any]]):
+    note = serializers.CharField()
+    format = serializers.ChoiceField(
+        choices=Note.Format.choices,
+        default=Note.Format.PLAIN,
+        required=False,
+    )
 
 
 def _get_viewable_duplicates(
@@ -1198,61 +1211,35 @@ class DocumentSerializer(
                             doc_id,
                         )
         if "tags" in validated_data:
-            # Respect tag hierarchy on updates:
-            # - Adding a child adds its ancestors
-            # - Removing a parent removes all its descendants
-            prev_tags = set(instance.tags.all())
-            requested_tags = set(validated_data["tags"])
+            hierarchy = Tag.get_hierarchy()
+            previous_ids = set(instance.tags.values_list("pk", flat=True))
+            requested_ids = {tag.pk for tag in validated_data["tags"]}
+            required_ids = hierarchy.with_ancestors(requested_ids - previous_ids)
+            blocked_ids = hierarchy.with_descendants(previous_ids - requested_ids)
+            blocked_ids.difference_update(required_ids)
+            final_ids = hierarchy.with_ancestors(requested_ids) - blocked_ids
+            validated_data["tags"] = list(Tag.objects.filter(pk__in=final_ids))
 
-            # Tags newly added in this update and the ancestors they require
-            added_tags = requested_tags - prev_tags
-            required_by_add_tags = set(added_tags)
-            for t in added_tags:
-                required_by_add_tags.update(t.get_ancestors())
-
-            # Tags being removed in this update and all descendants, except
-            # those required by a tag that is being added in this same update
-            removed_tags = prev_tags - requested_tags
-            blocked_tags = set(removed_tags)
-            for t in removed_tags:
-                blocked_tags.update(t.get_descendants())
-            blocked_tags.difference_update(required_by_add_tags)
-
-            # Add all parent tags
-            final_tags = set(requested_tags)
-            for t in requested_tags:
-                final_tags.update(t.get_ancestors())
-
-            # Drop removed parents and their descendants
-            final_tags.difference_update(blocked_tags)
-
-            validated_data["tags"] = list(final_tags)
         if validated_data.get("remove_inbox_tags"):
-            current_tag_ids = {t.pk for t in instance.tags.all()}
+            hierarchy = Tag.get_hierarchy()
             tags = (
                 validated_data["tags"]
                 if "tags" in validated_data
                 else list(instance.tags.all())
             )
-
-            # Tags newly added in this update, plus their ancestors, are kept
-            keep_ids: set[int] = set()
-            for tag in tags:
-                if tag.pk not in current_tag_ids:
-                    keep_ids.add(tag.pk)
-                    keep_ids.update(int(pk) for pk in tag.get_ancestors_pks())
-
-            # Remove inbox tags and their descendants, except those being kept
-            remove_ids: set[int] = set()
-            for inbox_tag in (
+            current_ids = set(instance.tags.values_list("pk", flat=True))
+            keep_ids = hierarchy.with_ancestors(
+                tag.pk for tag in tags if tag.pk not in current_ids
+            )
+            inbox_ids = (
                 Tag.objects.filter(is_inbox_tag=True)
-                .exclude(pk__in=keep_ids)
-                .only("pk", "tn_descendants_pks")
-            ):
-                remove_ids.add(inbox_tag.pk)
-                remove_ids.update(int(pk) for pk in inbox_tag.get_descendants_pks())
-
-            validated_data["tags"] = [t for t in tags if t.pk not in remove_ids]
+                .exclude(
+                    pk__in=keep_ids,
+                )
+                .values_list("pk", flat=True)
+            )
+            remove_ids = hierarchy.with_descendants(inbox_ids) - keep_ids
+            validated_data["tags"] = [tag for tag in tags if tag.pk not in remove_ids]
 
         if settings.AUDIT_LOG_ENABLED:
             with set_actor(self.user):
@@ -1701,6 +1688,7 @@ class MergeDocumentsSerializer(DocumentListSerializer, SourceModeValidationMixin
 
 class MergeDocumentsAsVersionsSerializer(DocumentListSerializer):
     root_document_id = serializers.IntegerField(required=True)
+    from_webui = serializers.BooleanField(required=False, default=False)
     version_label = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -1729,19 +1717,17 @@ class MergeDocumentsAsVersionsSerializer(DocumentListSerializer):
                 "root_document_id must be one of the selected documents.",
             )
 
-        selected_documents = Document.objects.filter(id__in=documents)
-        if selected_documents.filter(root_document__isnull=False).exists():
-            raise serializers.ValidationError(
-                "Only top-level documents can be merged as versions.",
+        # Rechecked under row locks during execution in case document state changes.
+        selected_documents = list(
+            Document.objects.filter(id__in=documents).only("id", "root_document"),
+        )
+        try:
+            bulk_edit.validate_merge_as_versions_state(
+                selected_documents,
+                attrs["root_document_id"],
             )
-
-        source_document_ids = set(documents) - {attrs["root_document_id"]}
-        if Document.global_objects.filter(
-            root_document_id__in=source_document_ids,
-        ).exists():
-            raise serializers.ValidationError(
-                "Documents with existing versions cannot be merged into another document.",
-            )
+        except ValueError as error:
+            raise serializers.ValidationError(str(error)) from error
         return attrs
 
 
@@ -1814,11 +1800,12 @@ class RemovePasswordDocumentsSerializer(
 
 
 class DeleteDocumentsSerializer(DocumentSelectionSerializer):
-    pass
+    from_webui = serializers.BooleanField(required=False, default=False)
 
 
 class ReprocessDocumentsSerializer(DocumentSelectionSerializer):
     remote_ocr = serializers.BooleanField(required=False, default=False)
+    from_webui = serializers.BooleanField(required=False, default=False)
 
 
 class BulkEditSerializer(
@@ -1851,6 +1838,7 @@ class BulkEditSerializer(
             "modify_tags",
             "modify_custom_fields",
             "set_permissions",
+            "run_workflow",
             *LEGACY_DOCUMENT_ACTION_METHODS,
         ],
         label="Method",
@@ -1940,6 +1928,8 @@ class BulkEditSerializer(
             return bulk_edit.reprocess
         elif method == "set_permissions":
             return bulk_edit.set_permissions
+        elif method == "run_workflow":
+            return bulk_edit.run_workflow
         elif method == "rotate":
             return bulk_edit.rotate
         elif method == "merge":
@@ -2179,6 +2169,35 @@ class BulkEditSerializer(
         else:
             parameters["remote_ocr"] = False
 
+    def _validate_parameters_run_workflow(self, parameters) -> None:
+        if "workflow" not in parameters:
+            raise serializers.ValidationError("workflow not specified")
+        try:
+            workflow = Workflow.objects.get(id=parameters["workflow"])
+        except (Workflow.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError("Workflow does not exist")
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None and not user.has_perm("documents.view_workflow"):
+            raise PermissionDenied(
+                "Insufficient permissions to run this workflow",
+            )
+        if not workflow.enabled:
+            raise serializers.ValidationError("Workflow is not enabled")
+        if not workflow.triggers.filter(
+            type=WorkflowTrigger.WorkflowTriggerType.MANUAL,
+        ).exists():
+            raise serializers.ValidationError(
+                "Workflow does not have a manual trigger",
+            )
+        if "filter_documents" in parameters:
+            if not isinstance(parameters["filter_documents"], bool):
+                raise serializers.ValidationError(
+                    "filter_documents must be a boolean",
+                )
+        else:
+            parameters["filter_documents"] = True
+
     def validate_parameters_remove_password(self, parameters):
         if "password" not in parameters:
             raise serializers.ValidationError("password not specified")
@@ -2245,6 +2264,8 @@ class BulkEditSerializer(
             self.validate_parameters_remove_password(parameters)
         elif method == bulk_edit.reprocess:
             self._validate_parameters_reprocess(parameters)
+        elif method == bulk_edit.run_workflow:
+            self._validate_parameters_run_workflow(parameters)
 
         return attrs
 
