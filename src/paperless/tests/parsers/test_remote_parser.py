@@ -105,6 +105,7 @@ def failing_azure_client(
 class TestRemoteParserProtocol:
     """Verify that RemoteDocumentParser satisfies the ParserProtocol contract."""
 
+    @pytest.mark.usefixtures("empty_remote_ocr_app_config")
     def test_isinstance_satisfies_protocol(
         self,
         remote_parser: RemoteDocumentParser,

@@ -357,6 +357,7 @@ class TestFileStabilityTracker:
         self,
         stability_tracker: FileStabilityTracker,
         tmp_path: Path,
+        mocker: MockerFixture,
     ) -> None:
         """Test tracking multiple files independently."""
         file1 = tmp_path / "file1.pdf"
@@ -364,21 +365,21 @@ class TestFileStabilityTracker:
         file1.write_bytes(b"content1")
         file2.write_bytes(b"content2")
 
+        clock = mocker.patch(
+            "documents.management.commands.document_consumer.monotonic",
+            return_value=0.0,
+        )
         stability_tracker.track(file1, Change.added)
-        sleep(0.05)
+        clock.return_value = 0.05
         stability_tracker.track(file2, Change.added)
 
         assert stability_tracker.pending_count == 2
 
-        sleep(0.06)
-        stable = list(stability_tracker.get_stable_files())
-        assert len(stable) == 1
-        assert stable[0] == file1
+        clock.return_value = 0.11
+        assert list(stability_tracker.get_stable_files()) == [file1]
 
-        sleep(0.06)
-        stable = list(stability_tracker.get_stable_files())
-        assert len(stable) == 1
-        assert stable[0] == file2
+        clock.return_value = 0.17
+        assert list(stability_tracker.get_stable_files()) == [file2]
 
     def test_track_resolves_path(
         self,
